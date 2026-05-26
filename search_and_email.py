@@ -290,27 +290,17 @@ def build_email_html(articles, today_str):
 
 # ── Send Email via Resend ─────────────────────────────────────────────────────
 def send_email(html_body, article_count, today_str):
+    import resend
+    resend.api_key = RESEND_API_KEY
     subject = f"EGFR Exon 20 Research Digest — {today_str} ({article_count} new articles)"
-    payload = json.dumps({
+    print(f"Sending email to {TO_EMAIL} via Resend...")
+    r = resend.Emails.send({
         "from": FROM_EMAIL,
         "to": [TO_EMAIL],
         "subject": subject,
         "html": html_body,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    print(f"Sending email to {TO_EMAIL} via Resend...")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        result = json.loads(resp.read().decode())
-        print(f"Email sent successfully. ID: {result.get('id', 'unknown')}")
+    })
+    print(f"Email sent successfully. ID: {r.get('id', 'unknown')}")
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
