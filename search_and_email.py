@@ -1,25 +1,22 @@
 """
 EGFR Exon 20 Insertion - Daily Open-Access Research Digest
 Searches PubMed/Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
-Filters for open-access only. Sends email digest to robertthanlon@gmail.com
+Filters for open-access only. Sends email digest via Resend API.
 """
 
 import os
-import smtplib
 import json
 import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 # ── Configuration ────────────────────────────────────────────────────────────
 SEARCH_TERM = "EGFR exon 20 insertion"
 DAYS_BACK = 7
 TO_EMAIL = "robertthanlon@gmail.com"
-FROM_EMAIL = os.environ["GMAIL_ADDRESS"]
-GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
+FROM_EMAIL = "digest@resend.dev"   # Resend's free sending address (no domain setup needed)
+RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -53,7 +50,6 @@ def search_europe_pmc():
     for item in data.get("resultList", {}).get("result", []):
         if item.get("isOpenAccess") != "Y":
             continue
-        # Prefer fullTextUrl, fall back to DOI
         pdf_url = None
         for link in item.get("fullTextUrlList", {}).get("fullTextUrl", []):
             if link.get("documentStyle") in ("pdf", "html") and link.get("availability") == "Open access":
@@ -79,7 +75,7 @@ def _format_authors_epmc(authors):
     names = [a.get("fullName", "") for a in authors[:3] if a.get("fullName")]
     return ", ".join(names) + (" et al." if len(authors) > 3 else "")
 
-# ── Source 2: PubMed (via NCBI E-utilities) ──────────────────────────────────
+# ── Source 2: PubMed ─────────────────────────────────────────────────────────
 def search_pubmed():
     print("Searching PubMed...")
     results = []
@@ -98,7 +94,7 @@ def search_pubmed():
         print("  No PubMed results.")
         return results
 
-    time.sleep(0.5)  # NCBI rate limit
+    time.sleep(0.5)
     fetch_url = (
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
         f"?db=pubmed&id={','.join(ids)}&retmode=json"
@@ -129,12 +125,11 @@ def search_pubmed():
     print(f"  Found {len(results)} open-access results from PubMed.")
     return results
 
-# ── Source 3: bioRxiv ────────────────────────────────────────────────────────
+# ── Source 3 & 4: bioRxiv / medRxiv ─────────────────────────────────────────
 def search_biorxiv():
     print("Searching bioRxiv...")
     return _search_rxiv("biorxiv")
 
-# ── Source 4: medRxiv ────────────────────────────────────────────────────────
 def search_medrxiv():
     print("Searching medRxiv...")
     return _search_rxiv("medrxiv")
@@ -293,18 +288,29 @@ def build_email_html(articles, today_str):
 </html>"""
     return html
 
-# ── Send Email ───────────────────────────────────────────────────────────────
+# ── Send Email via Resend ─────────────────────────────────────────────────────
 def send_email(html_body, article_count, today_str):
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"EGFR Exon 20 Research Digest — {today_str} ({article_count} new articles)"
-    msg["From"] = FROM_EMAIL
-    msg["To"] = TO_EMAIL
-    msg.attach(MIMEText(html_body, "html"))
-    print(f"Sending email to {TO_EMAIL}...")
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(FROM_EMAIL, GMAIL_APP_PASSWORD)
-        server.sendmail(FROM_EMAIL, TO_EMAIL, msg.as_string())
-    print("Email sent successfully.")
+    subject = f"EGFR Exon 20 Research Digest — {today_str} ({article_count} new articles)"
+    payload = json.dumps({
+        "from": FROM_EMAIL,
+        "to": [TO_EMAIL],
+        "subject": subject,
+        "html": html_body,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    print(f"Sending email to {TO_EMAIL} via Resend...")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        result = json.loads(resp.read().decode())
+        print(f"Email sent successfully. ID: {result.get('id', 'unknown')}")
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
@@ -319,7 +325,6 @@ def main():
     all_articles += search_semantic_scholar()
 
     unique_articles = deduplicate(all_articles)
-    # Sort by date descending
     unique_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
     print(f"\nTotal unique open-access articles: {len(unique_articles)}")
