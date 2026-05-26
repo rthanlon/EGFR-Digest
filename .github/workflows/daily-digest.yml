@@ -2,9 +2,8 @@ name: EGFR Exon 20 Daily Research Digest
 
 on:
   schedule:
-    # Runs every day at 8:00 AM Eastern Time (13:00 UTC)
     - cron: '0 13 * * *'
-  workflow_dispatch:  # Also allows you to run it manually with a button click
+  workflow_dispatch:
 
 jobs:
   send-digest:
@@ -21,7 +20,6 @@ jobs:
 
       - name: Run search and send email
         env:
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
         run: python search_and_email.py
