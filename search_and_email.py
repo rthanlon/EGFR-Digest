@@ -1,7 +1,8 @@
 """
 EGFR Exon 20 Insertion - Daily Open-Access Research Digest
 Searches PubMed/Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
-Filters for open-access only. Sends email digest via Resend API.
+Filters for open-access only. Tracks seen articles to avoid repeats.
+Sends email digest via Resend API.
 """
 
 import os
@@ -15,9 +16,29 @@ from datetime import datetime, timedelta
 SEARCH_TERM = "EGFR exon 20 insertion"
 DAYS_BACK = 7
 TO_EMAIL = "robertthanlon@gmail.com"
-FROM_EMAIL = "digest@resend.dev"   # Resend's free sending address (no domain setup needed)
+FROM_EMAIL = "digest@resend.dev"
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
+SEEN_FILE = "seen_articles.json"  # Tracks articles already emailed
+
+# ── Seen Articles Tracker ─────────────────────────────────────────────────────
+def load_seen():
+    """Load the set of already-sent article keys from disk."""
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def save_seen(seen):
+    """Save the updated set of sent article keys to disk."""
+    # Keep only the most recent 2000 entries to prevent file growing forever
+    seen_list = list(seen)[-2000:]
+    with open(SEEN_FILE, "w") as f:
+        json.dump(seen_list, f)
+
+def make_key(article):
+    """Create a short unique key for an article based on its title."""
+    return article["title"].lower().strip()[:80]
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def fetch_json(url, headers=None):
@@ -207,7 +228,7 @@ def deduplicate(articles):
     seen_titles = set()
     unique = []
     for a in articles:
-        key = a["title"].lower().strip()[:80]
+        key = make_key(a)
         if key not in seen_titles:
             seen_titles.add(key)
             unique.append(a)
@@ -218,8 +239,8 @@ def build_email_html(articles, today_str):
     if not articles:
         body_content = """
         <div class="no-results">
-            <p>No new open-access articles found in the last 7 days matching
-            <strong>"EGFR exon 20 insertion"</strong>.</p>
+            <p>No new open-access articles found in the past 7 days matching
+            <strong>"EGFR exon 20 insertion"</strong> that haven't already been sent.</p>
             <p>The search will run again tomorrow.</p>
         </div>
         """
@@ -270,12 +291,12 @@ def build_email_html(articles, today_str):
 <div class="wrapper">
   <div class="header">
     <h1>EGFR Exon 20 Insertion — Research Digest</h1>
-    <p>{today_str} &nbsp;·&nbsp; Open-access articles from the past 7 days</p>
+    <p>{today_str} &nbsp;·&nbsp; New open-access articles only</p>
   </div>
   <div class="body">
     <p class="summary">
-      Found <strong>{len(articles)} open-access article{"s" if len(articles) != 1 else ""}</strong>
-      across PubMed, Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
+      <strong>{len(articles)} new open-access article{"s" if len(articles) != 1 else ""}</strong>
+      found today across PubMed, Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
     </p>
     {body_content}
   </div>
@@ -307,6 +328,11 @@ def main():
     today_str = datetime.utcnow().strftime("%B %d, %Y")
     print(f"\n=== EGFR Exon 20 Daily Digest — {today_str} ===\n")
 
+    # Load articles already sent in previous runs
+    seen = load_seen()
+    print(f"Previously seen articles: {len(seen)}")
+
+    # Search all sources
     all_articles = []
     all_articles += search_europe_pmc()
     all_articles += search_pubmed()
@@ -314,13 +340,24 @@ def main():
     all_articles += search_medrxiv()
     all_articles += search_semantic_scholar()
 
+    # Deduplicate within this run
     unique_articles = deduplicate(all_articles)
     unique_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
-    print(f"\nTotal unique open-access articles: {len(unique_articles)}")
+    # Filter out articles already sent in previous runs
+    new_articles = [a for a in unique_articles if make_key(a) not in seen]
+    print(f"\nTotal found this run: {len(unique_articles)}")
+    print(f"Genuinely new (not previously sent): {len(new_articles)}")
 
-    html = build_email_html(unique_articles, today_str)
-    send_email(html, len(unique_articles), today_str)
+    # Send email (even if empty — so you know it ran)
+    html = build_email_html(new_articles, today_str)
+    send_email(html, len(new_articles), today_str)
+
+    # Update seen list with everything found this run
+    for a in unique_articles:
+        seen.add(make_key(a))
+    save_seen(seen)
+    print(f"Updated seen list now contains {len(seen)} articles.")
 
 if __name__ == "__main__":
     main()
