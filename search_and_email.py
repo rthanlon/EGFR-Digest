@@ -2,6 +2,7 @@
 EGFR Exon 20 Insertion - Daily Open-Access Research Digest
 Searches PubMed/Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
 Filters for open-access only. Tracks seen articles to avoid repeats.
+Uses Claude AI to draft a suggested X post for the most relevant article.
 Sends email digest via Resend API.
 """
 
@@ -18,26 +19,23 @@ DAYS_BACK = 7
 TO_EMAIL = "robertthanlon@gmail.com"
 FROM_EMAIL = "digest@resend.dev"
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
-SEEN_FILE = "seen_articles.json"  # Tracks articles already emailed
+SEEN_FILE = "seen_articles.json"
 
 # ── Seen Articles Tracker ─────────────────────────────────────────────────────
 def load_seen():
-    """Load the set of already-sent article keys from disk."""
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, "r") as f:
             return set(json.load(f))
     return set()
 
 def save_seen(seen):
-    """Save the updated set of sent article keys to disk."""
-    # Keep only the most recent 2000 entries to prevent file growing forever
     seen_list = list(seen)[-2000:]
     with open(SEEN_FILE, "w") as f:
         json.dump(seen_list, f)
 
 def make_key(article):
-    """Create a short unique key for an article based on its title."""
     return article["title"].lower().strip()[:80]
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -87,7 +85,7 @@ def search_europe_pmc():
             "date": item.get("firstPublicationDate", ""),
             "link": link,
             "source": "Europe PMC",
-            "abstract": item.get("abstractText", "")[:300] if item.get("abstractText") else "",
+            "abstract": item.get("abstractText", "")[:600] if item.get("abstractText") else "",
         })
     print(f"  Found {len(results)} open-access results from Europe PMC.")
     return results
@@ -176,7 +174,7 @@ def _search_rxiv(server):
             "date": item.get("date", ""),
             "link": f"https://doi.org/{doi}" if doi else "",
             "source": server.capitalize(),
-            "abstract": item.get("abstract", "")[:300],
+            "abstract": item.get("abstract", "")[:600],
         })
     print(f"  Found {len(results)} results from {server}.")
     return results
@@ -234,8 +232,112 @@ def deduplicate(articles):
             unique.append(a)
     return unique
 
+# ── Claude AI: Pick Best Article + Draft X Post ───────────────────────────────
+def draft_x_post(articles):
+    """Ask Claude to pick the most clinically relevant article and draft an X post."""
+    if not ANTHROPIC_API_KEY:
+        print("  No Anthropic API key — skipping X post draft.")
+        return None, None
+
+    if not articles:
+        return None, None
+
+    print("Asking Claude to draft X post...")
+
+    # Build a summary of all articles for Claude to evaluate
+    article_list = ""
+    for i, a in enumerate(articles[:20]):  # Cap at 20 to stay within token limits
+        article_list += f"""
+Article {i+1}:
+  Title: {a['title']}
+  Journal: {a['journal']}
+  Authors: {a['authors']}
+  Date: {a['date']}
+  Abstract: {a['abstract'] or '(no abstract available)'}
+  Link: {a['link']}
+"""
+
+    prompt = f"""You are helping the Exon 20 Group, a patient advocacy organization for people with EGFR exon 20 insertion lung cancer.
+
+Here are today's new open-access research articles on EGFR exon 20 insertion:
+
+{article_list}
+
+Your tasks:
+1. Identify the single most clinically relevant article for patients, caregivers, and advocates. Prioritize in this order: clinical trials > new drug data > survival/response outcomes > review articles > basic science.
+2. Write a draft X (Twitter) post about that article for the @Exon20IRC account. The post must:
+   - Be under 240 characters (leaving room for the link)
+   - Be written in plain English, understandable to patients and families
+   - Lead with the most important finding
+   - End with the hashtags #EGFRExon20 #LungCancer
+   - NOT include the link (it will be added separately)
+   - Be factually accurate — do not overstate findings
+3. Write one sentence explaining why you chose this article over the others.
+
+Respond in this exact JSON format with no other text:
+{{
+  "chosen_article_index": <number, 1-based>,
+  "x_post": "<the draft post text, no link>",
+  "reasoning": "<one sentence explaining your choice>"
+}}"""
+
+    payload = json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1000,
+        "messages": [{"role": "user", "content": prompt}]
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+            text = data["content"][0]["text"].strip()
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            result = json.loads(text.strip())
+            idx = result["chosen_article_index"] - 1
+            chosen = articles[idx] if 0 <= idx < len(articles) else articles[0]
+            print(f"  Claude chose: {chosen['title'][:60]}...")
+            return chosen, result
+    except Exception as e:
+        print(f"  Warning: Claude API call failed → {e}")
+        return None, None
+
 # ── Email Builder ────────────────────────────────────────────────────────────
-def build_email_html(articles, today_str):
+def build_email_html(articles, today_str, chosen_article=None, ai_result=None):
+
+    # ── X Post Draft Box ──
+    if chosen_article and ai_result:
+        post_text = ai_result.get("x_post", "")
+        reasoning = ai_result.get("reasoning", "")
+        full_post = f"{post_text} {chosen_article['link']}"
+        x_post_box = f"""
+        <div class="x-box">
+            <div class="x-label">📣 Suggested X Post for @Exon20IRC — Review &amp; Post When Ready</div>
+            <div class="x-post">{full_post}</div>
+            <div class="x-char-count">{len(full_post)} characters</div>
+            <div class="x-reasoning"><strong>Why this article:</strong> {reasoning}</div>
+            <a href="https://twitter.com/intent/tweet?text={urllib.parse.quote(full_post)}"
+               class="x-button">Open in X →</a>
+        </div>
+        """
+    else:
+        x_post_box = ""
+
+    # ── Article Cards ──
     if not articles:
         body_content = """
         <div class="no-results">
@@ -247,9 +349,10 @@ def build_email_html(articles, today_str):
     else:
         cards = ""
         for a in articles:
-            abstract_html = f'<p class="abstract">{a["abstract"]}{"..." if len(a["abstract"]) == 300 else ""}</p>' if a["abstract"] else ""
+            abstract_html = f'<p class="abstract">{a["abstract"]}{"..." if len(a["abstract"]) == 600 else ""}</p>' if a["abstract"] else ""
+            highlight = ' style="border-left: 4px solid #1a3a5c; padding-left: 16px;"' if chosen_article and make_key(a) == make_key(chosen_article) else ""
             cards += f"""
-            <div class="card">
+            <div class="card"{highlight}>
                 <div class="source-tag">{a['source']}</div>
                 <h2><a href="{a['link']}">{a['title']}</a></h2>
                 <p class="meta">{a['authors']}</p>
@@ -272,13 +375,23 @@ def build_email_html(articles, today_str):
   .header p {{ margin: 0; font-size: 13px; opacity: 0.75; }}
   .body {{ background: white; padding: 24px 32px; border-radius: 0 0 8px 8px; }}
   .summary {{ font-size: 14px; color: #555; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #eee; }}
+  .x-box {{ background: #f0f7ff; border: 2px solid #1a3a5c; border-radius: 8px;
+            padding: 20px 24px; margin-bottom: 32px; }}
+  .x-label {{ font-size: 12px; font-weight: bold; color: #1a3a5c; text-transform: uppercase;
+              letter-spacing: 0.5px; margin-bottom: 12px; }}
+  .x-post {{ font-size: 16px; line-height: 1.5; color: #111; background: white;
+             border-radius: 6px; padding: 14px 16px; margin-bottom: 8px;
+             border: 1px solid #ccd9e8; white-space: pre-wrap; word-break: break-word; }}
+  .x-char-count {{ font-size: 12px; color: #888; margin-bottom: 10px; }}
+  .x-reasoning {{ font-size: 13px; color: #555; font-style: italic; margin-bottom: 14px; }}
+  .x-button {{ display: inline-block; background: #1a3a5c; color: white; padding: 8px 18px;
+               border-radius: 20px; text-decoration: none; font-size: 13px; font-weight: bold; }}
   .card {{ margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid #eee; }}
   .card:last-child {{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }}
   .source-tag {{ display: inline-block; background: #e8f0f8; color: #1a3a5c; font-size: 11px;
                  font-family: monospace; padding: 2px 8px; border-radius: 3px; margin-bottom: 8px; }}
   .card h2 {{ margin: 0 0 8px 0; font-size: 16px; line-height: 1.4; }}
   .card h2 a {{ color: #1a3a5c; text-decoration: none; }}
-  .card h2 a:hover {{ text-decoration: underline; }}
   .meta {{ margin: 0 0 4px 0; font-size: 13px; color: #666; }}
   .journal {{ font-style: italic; }}
   .abstract {{ font-size: 13px; color: #444; line-height: 1.6; margin: 10px 0; }}
@@ -294,9 +407,11 @@ def build_email_html(articles, today_str):
     <p>{today_str} &nbsp;·&nbsp; New open-access articles only</p>
   </div>
   <div class="body">
+    {x_post_box}
     <p class="summary">
       <strong>{len(articles)} new open-access article{"s" if len(articles) != 1 else ""}</strong>
       found today across PubMed, Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
+      {f'The highlighted article (blue border) is the one suggested for X.' if chosen_article and articles else ''}
     </p>
     {body_content}
   </div>
@@ -328,11 +443,9 @@ def main():
     today_str = datetime.utcnow().strftime("%B %d, %Y")
     print(f"\n=== EGFR Exon 20 Daily Digest — {today_str} ===\n")
 
-    # Load articles already sent in previous runs
     seen = load_seen()
     print(f"Previously seen articles: {len(seen)}")
 
-    # Search all sources
     all_articles = []
     all_articles += search_europe_pmc()
     all_articles += search_pubmed()
@@ -340,20 +453,19 @@ def main():
     all_articles += search_medrxiv()
     all_articles += search_semantic_scholar()
 
-    # Deduplicate within this run
     unique_articles = deduplicate(all_articles)
     unique_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
-    # Filter out articles already sent in previous runs
     new_articles = [a for a in unique_articles if make_key(a) not in seen]
     print(f"\nTotal found this run: {len(unique_articles)}")
     print(f"Genuinely new (not previously sent): {len(new_articles)}")
 
-    # Send email (even if empty — so you know it ran)
-    html = build_email_html(new_articles, today_str)
+    # Ask Claude to pick the best article and draft an X post
+    chosen_article, ai_result = draft_x_post(new_articles)
+
+    html = build_email_html(new_articles, today_str, chosen_article, ai_result)
     send_email(html, len(new_articles), today_str)
 
-    # Update seen list with everything found this run
     for a in unique_articles:
         seen.add(make_key(a))
     save_seen(seen)
