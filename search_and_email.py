@@ -273,24 +273,17 @@ Your tasks:
    - NOT include the link (it will be added separately)
    - Be factually accurate — do not overstate findings
 3. Write one sentence explaining why you chose this article over the others.
-4. For EVERY article in the list, assess whether it might demoralize a patient or caregiver. Flag it if it contains any of the following: poor survival outcomes, very low response rates, findings suggesting limited treatment options, high toxicity with poor benefit, or conclusions that could cause a patient to feel hopeless about their prognosis. Err on the side of flagging when in doubt. For each flagged article provide a brief plain-English explanation of why it might be difficult to read.
 
 Respond in this exact JSON format with no other text:
 {{
   "chosen_article_index": <number, 1-based>,
   "x_post": "<the draft post text, no link>",
-  "reasoning": "<one sentence explaining your choice>",
-  "sensitive_articles": [
-    {{
-      "article_index": <number, 1-based>,
-      "reason": "<one plain-English sentence explaining why this might be difficult for patients>"
-    }}
-  ]
+  "reasoning": "<one sentence explaining your choice>"
 }}"""
 
     payload = json.dumps({
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 2000,
+        "max_tokens": 1000,
         "messages": [{"role": "user", "content": prompt}]
     }).encode("utf-8")
 
@@ -318,22 +311,13 @@ Respond in this exact JSON format with no other text:
             idx = result["chosen_article_index"] - 1
             chosen = articles[idx] if 0 <= idx < len(articles) else articles[0]
             print(f"  Claude chose: {chosen['title'][:60]}...")
-            # Build sensitive_keys dict: article key -> reason
-            sensitive_keys = {}
-            for s in result.get("sensitive_articles", []):
-                sidx = s.get("article_index", 0) - 1
-                if 0 <= sidx < len(articles):
-                    sensitive_keys[make_key(articles[sidx])] = s.get("reason", "")
-            if sensitive_keys:
-                print(f"  Flagged {len(sensitive_keys)} potentially sensitive articles.")
-            result["sensitive_keys"] = sensitive_keys
             return chosen, result
     except Exception as e:
         print(f"  Warning: Claude API call failed → {e}")
         return None, None
 
 # ── Email Builder ────────────────────────────────────────────────────────────
-def build_email_html(articles, today_str, chosen_article=None, ai_result=None, sensitive_keys=None):
+def build_email_html(articles, today_str, chosen_article=None, ai_result=None):
 
     # ── X Post Draft Box ──
     if chosen_article and ai_result:
@@ -479,8 +463,7 @@ def main():
     # Ask Claude to pick the best article and draft an X post
     chosen_article, ai_result = draft_x_post(new_articles)
 
-    sensitive_keys = ai_result.get("sensitive_keys", {}) if ai_result else {}
-    html = build_email_html(new_articles, today_str, chosen_article, ai_result, sensitive_keys)
+    html = build_email_html(new_articles, today_str, chosen_article, ai_result)
     send_email(html, len(new_articles), today_str)
 
     for a in unique_articles:
