@@ -5,6 +5,10 @@ on:
     - cron: '0 13 * * *'
   workflow_dispatch:
 
+# Allow the workflow to write back to the repository (to save seen_articles.json)
+permissions:
+  contents: write
+
 jobs:
   send-digest:
     runs-on: ubuntu-latest
@@ -26,3 +30,11 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
         run: python search_and_email.py
+
+      - name: Save seen articles back to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_articles.json
+          git diff --staged --quiet || git commit -m "Update seen articles [skip ci]"
+          git push
