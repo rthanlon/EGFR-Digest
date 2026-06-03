@@ -516,7 +516,7 @@ def run_search(search_config, today_str):
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
     print(f"  Total found: {len(all_articles)}")
 
-    new_articles = [a for a in all_articles if make_key(a) not in seen]
+    new_articles = [a for a in new_articles if make_key(a) not in seen]
     print(f"  Genuinely new: {len(new_articles)}")
 
     chosen_article, ai_result = analyze_articles(new_articles, label)
@@ -531,7 +531,7 @@ def run_search(search_config, today_str):
     subject = f"{label} Digest — {today_str} ({len(new_articles)} new articles)"
     send_email(html, subject)
 
-    for a in all_articles:
+    for a in new_articles:
         seen.add(make_key(a))
     save_seen(seen, seen_file)
     print(f"  Memory updated: {len(seen)} total articles tracked.")
