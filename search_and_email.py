@@ -16,7 +16,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 # ── Configuration ────────────────────────────────────────────────────────────
-DAYS_BACK        = 7
+DAYS_BACK        = 2
 TO_EMAIL         = "robertthanlon@gmail.com"
 FROM_EMAIL       = "digest@resend.dev"
 RESEND_API_KEY   = os.environ["RESEND_API_KEY"]
@@ -298,7 +298,7 @@ Respond in this exact JSON format with no other text:
 }}"""
 
     payload = json.dumps({
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-20250514",
         "max_tokens": 2000,
         "messages": [{"role": "user", "content": prompt}]
     }).encode("utf-8")
