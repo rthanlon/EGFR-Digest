@@ -1,8 +1,8 @@
 name: EGFR Exon 20 Daily Research Digest
 
 on:
-  schedule:
-    - cron: '0 13 * * *'
+  #schedule:
+  #  - cron: '0 13 * * *'
   workflow_dispatch:
 
 permissions:
