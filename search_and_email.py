@@ -26,12 +26,14 @@ SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_API_KEY", "")
 SEARCHES = [
     {
         "label": "EGFR Exon 20 Insertion",
+        "short_label": "EGFR",
         "terms": ["EGFR exon 20 insertion"],
         "seen_file": "seen_egfr.json",
         "header_color": "#1a3a5c",
     },
     {
         "label": "HER2 / ERBB2 Exon 20 & Amplification",
+        "short_label": "HER2",
         "terms": ["HER2 exon 20", "ERBB2 exon 20", "HER2 amp"],
         "seen_file": "seen_her2.json",
         "header_color": "#2d6a4f",
@@ -291,12 +293,10 @@ Your tasks:
 
 1. Identify the single most clinically relevant article for patients, caregivers, and advocates. Prioritize: clinical trials > new drug data > survival/response outcomes > review articles > basic science.
 
-2. Write a draft X (Twitter) post about that article for the @Exon20IRC account:
-   - Under 240 characters (link added separately)
-   - Plain English, understandable to patients and families
-   - Lead with the most important finding
-   - End with #EGFRExon20 #LungCancer (for EGFR searches) or #HER2LungCancer #LungCancer (for HER2 searches)
-   - Factually accurate — do not overstate findings
+2. Write THREE different summaries of that article, all targeting the patient and advocate community in plain English. Each should be under 240 characters (link added separately), end with #EGFRExon20 #LungCancer (for EGFR searches) or #HER2LungCancer #LungCancer (for HER2 searches), and be factually accurate without overstating findings. Make each one distinct:
+   - post_1 (@Exon20IRC): Straightforward factual summary of the key finding
+   - post_2 (@RobertTHanlon2): Emphasizes what this means for patients — hopeful, patient-centered angle
+   - post_3 (Website): Broader context — why this research matters for the EGFR/HER2 exon 20 community
 
 3. Write one sentence explaining why you chose this article.
 
@@ -309,7 +309,9 @@ Your tasks:
 Respond in this exact JSON format with no other text:
 {{
   "chosen_article_index": <number, 1-based>,
-  "x_post": "<draft post text, no link>",
+  "post_1": "<@Exon20IRC post — factual summary, no link>",
+  "post_2": "<@RobertTHanlon2 post — patient-centered angle, no link>",
+  "post_3": "<Website post — broader context, no link>",
   "reasoning": "<one sentence>",
   "sensitive_articles": [
     {{
@@ -390,19 +392,37 @@ def build_email_html(articles, today_str, search_config,
     endpoint_keys  = endpoint_keys  or {}
     header_color   = search_config["header_color"]
     label          = search_config["label"]
+    short_label    = search_config.get("short_label", label)
 
     if chosen_article and ai_result:
-        post_text  = ai_result.get("x_post", "")
+        link       = chosen_article['link']
+        post_1     = ai_result.get("post_1", "")
+        post_2     = ai_result.get("post_2", "")
+        post_3     = ai_result.get("post_3", "")
         reasoning  = ai_result.get("reasoning", "")
-        full_post  = f"{post_text} {chosen_article['link']}"
+        full_1     = f"{post_1} {link}"
+        full_2     = f"{post_2} {link}"
+        full_3     = f"{post_3} {link}"
         x_post_box = f"""
         <div class="x-box">
-            <div class="x-label">📣 Suggested X Post for @Exon20IRC — Review &amp; Post When Ready</div>
-            <div class="x-post">{full_post}</div>
-            <div class="x-char-count">{len(full_post)} characters</div>
+            <div class="x-label">📣 Suggested Posts — Review &amp; Post When Ready</div>
             <div class="x-reasoning"><strong>Why this article:</strong> {reasoning}</div>
-            <a href="https://twitter.com/intent/tweet?text={urllib.parse.quote(full_post)}"
+
+            <div class="post-label">{short_label}/1 — @Exon20IRC — Factual summary</div>
+            <div class="x-post">{full_1}</div>
+            <div class="x-char-count">{len(full_1)} characters</div>
+            <a href="https://twitter.com/intent/tweet?text={urllib.parse.quote(full_1)}"
                class="x-button">Open in X →</a>
+
+            <div class="post-label" style="margin-top:16px;">{short_label}/2 — @RobertTHanlon2 — Patient-centered</div>
+            <div class="x-post">{full_2}</div>
+            <div class="x-char-count">{len(full_2)} characters</div>
+            <a href="https://twitter.com/intent/tweet?text={urllib.parse.quote(full_2)}"
+               class="x-button">Open in X →</a>
+
+            <div class="post-label" style="margin-top:16px;">{short_label}/3 — Website — Broader context</div>
+            <div class="x-post">{full_3}</div>
+            <div class="x-char-count">{len(full_3)} characters</div>
         </div>"""
     else:
         x_post_box = ""
