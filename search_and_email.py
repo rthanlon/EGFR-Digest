@@ -95,7 +95,7 @@ def search_europe_pmc(term):
         f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
         f"?query={query}&resultType=core&pageSize=50&format=json"
         f"&fromDate={cutoff}&toDate={datetime.utcnow().strftime('%Y-%m-%d')}"
-        f"&sort=P_PDATE_D desc"
+        f"&sort=P_PDATE_D+desc"
     )
     data = fetch_json(url)
     if not data:
