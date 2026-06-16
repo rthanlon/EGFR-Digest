@@ -408,19 +408,19 @@ def build_email_html(articles, today_str, search_config,
             <div class="x-label">📣 Suggested Posts — Review &amp; Post When Ready</div>
             <div class="x-reasoning"><strong>Why this article:</strong> {reasoning}</div>
 
-            <div class="post-label">{short_label}/1 — @Exon20IRC — Factual summary</div>
+            <div class="post-label">{short_label}/1</div>
             <div class="x-post">{full_1}</div>
             <div class="x-char-count">{len(full_1)} characters</div>
             <a href="https://twitter.com/intent/tweet?text={urllib.parse.quote(full_1)}"
                class="x-button">Open in X →</a>
 
-            <div class="post-label" style="margin-top:16px;">{short_label}/2 — @RobertTHanlon2 — Patient-centered</div>
+            <div class="post-label" style="margin-top:16px;">{short_label}/2</div>
             <div class="x-post">{full_2}</div>
             <div class="x-char-count">{len(full_2)} characters</div>
             <a href="https://twitter.com/intent/tweet?text={urllib.parse.quote(full_2)}"
                class="x-button">Open in X →</a>
 
-            <div class="post-label" style="margin-top:16px;">{short_label}/3 — Website — Broader context</div>
+            <div class="post-label" style="margin-top:16px;">{short_label}/3</div>
             <div class="x-post">{full_3}</div>
             <div class="x-char-count">{len(full_3)} characters</div>
         </div>"""
