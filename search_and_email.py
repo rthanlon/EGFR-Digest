@@ -3,9 +3,10 @@ Daily Open-Access Research Digest
 Runs two separate searches each morning:
   1. EGFR exon 20 insertion
   2. HER2 exon 20 / ERBB2 exon 20 / HER2 amp
-For each search: finds new open-access articles, asks Claude to pick the
-best one and draft an X post, flags demoralizing content and clinical
-endpoints (PFS, OS, ORR, etc.), and sends a formatted email digest.
+For each search: finds ALL recent articles (open-access and paywalled),
+shows open-access above the line and paywalled below,
+asks Claude to pick the best open-access article and draft posts,
+flags demoralizing content and clinical endpoints on all articles.
 """
 
 import os
@@ -66,77 +67,68 @@ def fetch_json(url, headers=None):
         return None
 
 def date_cutoff_str():
-    """Return cutoff date as YYYY-MM-DD string."""
     return (datetime.utcnow() - timedelta(days=DAYS_BACK)).strftime("%Y-%m-%d")
 
 def date_cutoff_pubmed():
-    """Return cutoff date as YYYY/MM/DD for PubMed."""
     return (datetime.utcnow() - timedelta(days=DAYS_BACK)).strftime("%Y/%m/%d")
 
 def is_recent(date_str):
-    """Return True if a date string (YYYY-MM-DD or YYYY) is within DAYS_BACK days."""
     if not date_str:
         return False
     try:
-        if len(date_str) == 4:  # year only
+        if len(date_str) == 4:
             cutoff_year = (datetime.utcnow() - timedelta(days=DAYS_BACK)).year
             return int(date_str) >= cutoff_year
-        # Try YYYY-MM-DD
         pub_date = datetime.strptime(date_str[:10], "%Y-%m-%d")
         cutoff = datetime.utcnow() - timedelta(days=DAYS_BACK)
         return pub_date >= cutoff
     except Exception:
-        return True  # If we can't parse it, include it
+        return True
 
-# ── Source searches ──────────────────────────────────────────────────────────
+# ── Source searches — return ALL articles with open_access flag ───────────────
 def search_europe_pmc(term):
     results = []
-    # Removed strict OPEN_ACCESS:Y query filter — Europe PMC distinguishes
-    # "Open Access" (license-based) from "Free full text" (publicly readable).
-    # We want anything readable without a paywall, so we filter client-side
-    # using the broader fullTextUrlList check below instead.
     query = urllib.parse.quote(f'"{term}"')
-    cutoff = date_cutoff_str()
+    # Europe PMC ignores fromDate/toDate, so fetch large page sorted newest
+    # first and filter client-side by firstIndexDate.
     url = (
         f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-        f"?query={query}&resultType=core&pageSize=50&format=json"
-        f"&fromDate={cutoff}&toDate={datetime.utcnow().strftime('%Y-%m-%d')}"
+        f"?query={query}&resultType=core&pageSize=250&format=json"
         f"&sort=P_PDATE_D+desc"
     )
     data = fetch_json(url)
     if not data:
         return results
     for item in data.get("resultList", {}).get("result", []):
-        # Verify date client-side as extra check
-        pub_date = item.get("firstPublicationDate", "")
-        if pub_date and not is_recent(pub_date):
+        index_date = item.get("firstIndexDate", "") or item.get("firstPublicationDate", "")
+        pub_date   = item.get("firstPublicationDate", "") or index_date
+        if index_date and not is_recent(index_date):
             continue
-        # Broader free-to-read check: accept either the strict open-access
-        # flag OR any full-text link marked as freely available (covers
-        # PMC "free full text" articles that aren't tagged OPEN_ACCESS:Y).
+        doi = item.get("doi")
+        # Determine if open access
         is_oa = item.get("isOpenAccess") == "Y"
-        pdf_url = None
+        free_link = None
         for link in item.get("fullTextUrlList", {}).get("fullTextUrl", []):
             avail = (link.get("availability") or "").lower()
             if link.get("documentStyle") in ("pdf", "html") and ("open access" in avail or "free" in avail):
-                pdf_url = link.get("url")
+                free_link = link.get("url")
                 break
-        if not is_oa and not pdf_url:
-            continue
-        doi = item.get("doi")
-        link = pdf_url or (f"https://doi.org/{doi}" if doi else None)
-        if not link:
+        open_access = is_oa or bool(free_link)
+        # Build best available link
+        article_link = free_link or (f"https://doi.org/{doi}" if doi else None)
+        if not article_link:
             continue
         results.append({
             "title": item.get("title", "Untitled").rstrip("."),
             "authors": _fmt_authors_epmc(item.get("authorList", {}).get("author", [])),
             "journal": item.get("journalTitle", ""),
             "date": pub_date,
-            "link": link,
+            "link": article_link,
             "source": "Europe PMC",
             "abstract": item.get("abstractText", "")[:600] if item.get("abstractText") else "",
+            "open_access": open_access,
         })
-    print(f"    Europe PMC: {len(results)} results")
+    print(f"    Europe PMC: {len(results)} results ({sum(1 for a in results if a['open_access'])} open access)")
     return results
 
 def _fmt_authors_epmc(authors):
@@ -144,33 +136,50 @@ def _fmt_authors_epmc(authors):
     return ", ".join(names) + (" et al." if len(authors) > 3 else "")
 
 def search_pubmed(term):
+    """Run two PubMed queries: all articles + free-full-text subset to flag open access."""
     results = []
     cutoff = date_cutoff_pubmed()
     today = datetime.utcnow().strftime("%Y/%m/%d")
-    query = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
-    data = fetch_json(
+
+    # Query 1: ALL articles matching the term in date range
+    query_all = urllib.parse.quote(f'"{term}"[Title/Abstract]')
+    data_all = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        f"?db=pubmed&term={query}&mindate={cutoff}&maxdate={today}"
+        f"?db=pubmed&term={query_all}&mindate={cutoff}&maxdate={today}"
         f"&datetype=pdat&retmax=50&retmode=json"
     )
-    if not data:
-        return results
-    ids = data.get("esearchresult", {}).get("idlist", [])
-    if not ids:
+    all_ids = set(data_all.get("esearchresult", {}).get("idlist", [])) if data_all else set()
+
+    time.sleep(0.4)
+
+    # Query 2: free full text only — to identify which are open access
+    query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
+    data_free = fetch_json(
+        f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+        f"?db=pubmed&term={query_free}&mindate={cutoff}&maxdate={today}"
+        f"&datetype=pdat&retmax=50&retmode=json"
+    )
+    free_ids = set(data_free.get("esearchresult", {}).get("idlist", [])) if data_free else set()
+
+    if not all_ids:
         print(f"    PubMed: 0 results")
         return results
-    time.sleep(0.5)
+
+    time.sleep(0.4)
+
     summary = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-        f"?db=pubmed&id={','.join(ids)}&retmode=json"
+        f"?db=pubmed&id={','.join(all_ids)}&retmode=json"
     )
     if not summary:
         return results
-    for pmid in ids:
+
+    for pmid in all_ids:
         item = summary.get("result", {}).get(pmid, {})
         if not item:
             continue
         doi = next((x["value"] for x in item.get("articleids", []) if x["idtype"] == "doi"), None)
+        is_free = pmid in free_ids
         link = f"https://doi.org/{doi}" if doi else f"https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/{pmid}/"
         authors_raw = item.get("authors", [])
         authors = ", ".join(a["name"] for a in authors_raw[:3])
@@ -184,11 +193,14 @@ def search_pubmed(term):
             "link": link,
             "source": "PubMed",
             "abstract": "",
+            "open_access": is_free,
         })
-    print(f"    PubMed: {len(results)} results")
+    oa_count = sum(1 for a in results if a["open_access"])
+    print(f"    PubMed: {len(results)} results ({oa_count} open access)")
     return results
 
 def _search_rxiv(server, term):
+    # All preprints are open access by definition
     results = []
     end_date = datetime.utcnow().strftime("%Y-%m-%d")
     start_date = date_cutoff_str()
@@ -209,8 +221,9 @@ def _search_rxiv(server, term):
             "link": f"https://doi.org/{doi}" if doi else "",
             "source": server.capitalize(),
             "abstract": item.get("abstract", "")[:600],
+            "open_access": True,
         })
-    print(f"    {server}: {len(results)} results")
+    print(f"    {server}: {len(results)} results (all open access)")
     return results
 
 def search_semantic_scholar(term):
@@ -224,13 +237,15 @@ def search_semantic_scholar(term):
     )
     if not data:
         return results
-    count = 0
     for item in data.get("data", []):
-        pdf_info = item.get("openAccessPdf")
-        if not pdf_info or not pdf_info.get("url"):
-            continue
         pub_date = item.get("publicationDate", "") or str(item.get("year", ""))
         if not is_recent(pub_date):
+            continue
+        pdf_info = item.get("openAccessPdf")
+        is_oa = bool(pdf_info and pdf_info.get("url"))
+        doi = (item.get("externalIds") or {}).get("DOI", "")
+        link = pdf_info["url"] if is_oa else (f"https://doi.org/{doi}" if doi else "")
+        if not link:
             continue
         authors = item.get("authors", [])
         author_str = ", ".join(a["name"] for a in authors[:3])
@@ -241,12 +256,13 @@ def search_semantic_scholar(term):
             "authors": author_str,
             "journal": item.get("journal", {}).get("name", "") if item.get("journal") else "",
             "date": pub_date,
-            "link": pdf_info["url"],
+            "link": link,
             "source": "Semantic Scholar",
             "abstract": "",
+            "open_access": is_oa,
         })
-        count += 1
-    print(f"    Semantic Scholar: {count} results")
+    oa_count = sum(1 for a in results if a["open_access"])
+    print(f"    Semantic Scholar: {len(results)} results ({oa_count} open access)")
     return results
 
 # ── Run all sources for a list of terms (OR logic) ───────────────────────────
@@ -271,17 +287,26 @@ def deduplicate(articles):
             unique.append(a)
     return unique
 
-# ── Claude AI: Pick Best Article, Draft X Post, Flag Issues ──────────────────
-def analyze_articles(articles, search_label):
-    if not ANTHROPIC_API_KEY or not articles:
+# ── Claude AI: Pick Best OA Article, Draft Posts, Flag All Articles ───────────
+def analyze_articles(oa_articles, all_articles, search_label):
+    """
+    oa_articles  — open-access only (for suggested post selection)
+    all_articles — everything (for flags)
+    """
+    if not ANTHROPIC_API_KEY or not all_articles:
         return None, None
 
-    print(f"  Asking Claude to analyze {len(articles)} articles...")
+    print(f"  Asking Claude to analyze {len(all_articles)} articles ({len(oa_articles)} open access)...")
+
+    # Build article list — OA articles first, then paywalled
+    combined = oa_articles + [a for a in all_articles if not a.get("open_access")]
+    oa_indices = set(range(1, len(oa_articles) + 1))  # 1-based indices of OA articles
 
     article_list = ""
-    for i, a in enumerate(articles[:20]):
+    for i, a in enumerate(combined[:25]):
+        oa_label = "[OPEN ACCESS]" if a.get("open_access") else "[PAYWALLED]"
         article_list += f"""
-Article {i+1}:
+Article {i+1} {oa_label}:
   Title: {a['title']}
   Journal: {a['journal']}
   Authors: {a['authors']}
@@ -294,33 +319,33 @@ Article {i+1}:
 
 Today's search: {search_label}
 
-Here are today's new open-access research articles:
+Here are today's new research articles. Articles marked [OPEN ACCESS] are freely readable. Articles marked [PAYWALLED] require a subscription.
 
 {article_list}
 
 Your tasks:
 
-1. Identify the single most clinically relevant article for patients, caregivers, and advocates. Prioritize: clinical trials > new drug data > survival/response outcomes > review articles > basic science.
+1. From the [OPEN ACCESS] articles ONLY, identify the single most clinically relevant one for patients, caregivers, and advocates. Prioritize: clinical trials > new drug data > survival/response outcomes > review articles > basic science. Do NOT select a [PAYWALLED] article for this.
 
-2. Write THREE different summaries of that article, all targeting the patient and advocate community in plain English. Each should be under 240 characters (link added separately), end with #EGFRExon20 #LungCancer (for EGFR searches) or #HER2LungCancer #LungCancer (for HER2 searches), and be factually accurate without overstating findings. Make each one distinct:
-   - post_1 (@Exon20IRC): Straightforward factual summary of the key finding
-   - post_2 (@RobertTHanlon2): Emphasizes what this means for patients — hopeful, patient-centered angle
-   - post_3 (Website): Broader context — why this research matters for the EGFR/HER2 exon 20 community
+2. Write THREE different summaries of that chosen open-access article, all targeting the patient and advocate community in plain English. Each should be under 240 characters (link added separately), end with #EGFRExon20 #LungCancer (for EGFR searches) or #HER2LungCancer #LungCancer (for HER2 searches), and be factually accurate without overstating findings. Make each one distinct:
+   - post_1: Straightforward factual summary of the key finding
+   - post_2: Emphasizes what this means for patients — hopeful, patient-centered angle
+   - post_3: Broader context — why this research matters for the EGFR/HER2 exon 20 community
 
 3. Write one sentence explaining why you chose this article.
 
-4. For EVERY article, assess two things independently:
+4. For EVERY article (both open access and paywalled), assess two things independently:
 
-   a) DEMORALIZING FLAG: Flag if it contains poor survival outcomes, very low response rates, findings suggesting very limited treatment options, high toxicity with poor benefit, or conclusions likely to cause hopelessness. Err on the side of flagging.
+   a) DEMORALIZING FLAG: Flag if it contains poor survival outcomes, very low response rates, findings suggesting very limited treatment options, high toxicity with poor benefit, or conclusions likely to cause hopelessness. Err on the side of flagging. Use abstract if available; use title alone if no abstract.
 
    b) CLINICAL ENDPOINTS FLAG: Flag if the article reports or discusses any clinical endpoints including but not limited to: PFS, OS, ORR, DOR, TTR, EFS, RFS, DCR, CBR, TTP, or any other efficacy or survival metric. List which specific endpoints are mentioned.
 
 Respond in this exact JSON format with no other text:
 {{
-  "chosen_article_index": <number, 1-based>,
-  "post_1": "<@Exon20IRC post — factual summary, no link>",
-  "post_2": "<@RobertTHanlon2 post — patient-centered angle, no link>",
-  "post_3": "<Website post — broader context, no link>",
+  "chosen_article_index": <number, 1-based, must be an open-access article>,
+  "post_1": "<factual summary, no link>",
+  "post_2": "<patient-centered angle, no link>",
+  "post_3": "<broader context, no link>",
   "reasoning": "<one sentence>",
   "sensitive_articles": [
     {{
@@ -364,20 +389,22 @@ Respond in this exact JSON format with no other text:
             result = json.loads(text.strip())
 
             idx = result["chosen_article_index"] - 1
-            chosen = articles[idx] if 0 <= idx < len(articles) else articles[0]
-            print(f"  Claude chose: {chosen['title'][:60]}...")
+            chosen = combined[idx] if 0 <= idx < len(combined) else (oa_articles[0] if oa_articles else None)
+            if chosen:
+                print(f"  Claude chose: {chosen['title'][:60]}...")
 
+            # Build flag dicts using combined article order
             sensitive_keys = {}
             for s in result.get("sensitive_articles", []):
                 sidx = s.get("article_index", 0) - 1
-                if 0 <= sidx < len(articles):
-                    sensitive_keys[make_key(articles[sidx])] = s.get("reason", "")
+                if 0 <= sidx < len(combined):
+                    sensitive_keys[make_key(combined[sidx])] = s.get("reason", "")
 
             endpoint_keys = {}
             for e in result.get("endpoint_articles", []):
                 eidx = e.get("article_index", 0) - 1
-                if 0 <= eidx < len(articles):
-                    endpoint_keys[make_key(articles[eidx])] = e.get("endpoints", "")
+                if 0 <= eidx < len(combined):
+                    endpoint_keys[make_key(combined[eidx])] = e.get("endpoints", "")
 
             if sensitive_keys:
                 print(f"  Flagged {len(sensitive_keys)} potentially sensitive articles.")
@@ -393,7 +420,7 @@ Respond in this exact JSON format with no other text:
         return None, None
 
 # ── Email Builder ─────────────────────────────────────────────────────────────
-def build_email_html(articles, today_str, search_config,
+def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
                      chosen_article=None, ai_result=None,
                      sensitive_keys=None, endpoint_keys=None):
 
@@ -402,16 +429,18 @@ def build_email_html(articles, today_str, search_config,
     header_color   = search_config["header_color"]
     label          = search_config["label"]
     short_label    = search_config.get("short_label", label)
+    all_articles   = oa_articles + paywalled_articles
 
+    # ── X Post Draft Box ──
     if chosen_article and ai_result:
-        link       = chosen_article['link']
-        post_1     = ai_result.get("post_1", "")
-        post_2     = ai_result.get("post_2", "")
-        post_3     = ai_result.get("post_3", "")
-        reasoning  = ai_result.get("reasoning", "")
-        full_1     = f"{post_1} {link}"
-        full_2     = f"{post_2} {link}"
-        full_3     = f"{post_3} {link}"
+        link      = chosen_article['link']
+        post_1    = ai_result.get("post_1", "")
+        post_2    = ai_result.get("post_2", "")
+        post_3    = ai_result.get("post_3", "")
+        reasoning = ai_result.get("reasoning", "")
+        full_1    = f"{post_1} {link}"
+        full_2    = f"{post_2} {link}"
+        full_3    = f"{post_3} {link}"
         x_post_box = f"""
         <div class="x-box">
             <div class="x-label">📣 Suggested Posts — Review &amp; Post When Ready</div>
@@ -436,45 +465,70 @@ def build_email_html(articles, today_str, search_config,
     else:
         x_post_box = ""
 
-    if not articles:
+    def make_card(a, section="oa"):
+        akey = make_key(a)
+        abstract_html = (
+            f'<p class="abstract">{a["abstract"]}{"..." if len(a["abstract"]) == 600 else ""}</p>'
+            if a["abstract"] else ""
+        )
+        is_chosen = chosen_article and akey == make_key(chosen_article)
+        highlight = f' style="border-left: 4px solid {header_color}; padding-left: 16px;"' if is_chosen else ""
+        sensitive_html = (
+            f'<div class="flag flag-sensitive">⚠️ <strong>Heads up:</strong> {sensitive_keys[akey]}</div>'
+            if akey in sensitive_keys else ""
+        )
+        endpoint_html = (
+            f'<div class="flag flag-endpoint">📊 <strong>Clinical endpoints reported:</strong> {endpoint_keys[akey]}</div>'
+            if akey in endpoint_keys else ""
+        )
+        if section == "oa":
+            action = f'<a href="{a["link"]}" class="read-link">Read full article →</a>'
+        else:
+            action = f'<a href="{a["link"]}" class="read-link paywall-link">🔒 View abstract (paywall)</a>'
+
+        return f"""
+        <div class="card"{highlight}>
+            <div class="source-tag">{a['source']}</div>
+            <h2><a href="{a['link']}">{a['title']}</a></h2>
+            <p class="meta">{a['authors']}</p>
+            <p class="meta journal">{a['journal']} &nbsp;·&nbsp; {a['date']}</p>
+            {abstract_html}
+            {sensitive_html}
+            {endpoint_html}
+            {action}
+        </div>"""
+
+    # ── Build body content ──
+    if not all_articles:
         body_content = f"""
         <div class="no-results">
-            <p>No new open-access articles found in the past {DAYS_BACK} days for
+            <p>No new articles found in the past {DAYS_BACK} days for
             <strong>{label}</strong> that haven't already been sent.</p>
             <p>The search will run again tomorrow.</p>
         </div>"""
     else:
-        cards = ""
-        for a in articles:
-            abstract_html = (
-                f'<p class="abstract">{a["abstract"]}{"..." if len(a["abstract"]) == 600 else ""}</p>'
-                if a["abstract"] else ""
-            )
-            akey = make_key(a)
-            is_chosen = chosen_article and akey == make_key(chosen_article)
-            highlight = f' style="border-left: 4px solid {header_color}; padding-left: 16px;"' if is_chosen else ""
+        oa_cards = "".join(make_card(a, "oa") for a in oa_articles)
+        pay_cards = "".join(make_card(a, "pay") for a in paywalled_articles)
 
-            sensitive_html = (
-                f'<div class="flag flag-sensitive">⚠️ <strong>Heads up:</strong> {sensitive_keys[akey]}</div>'
-                if akey in sensitive_keys else ""
-            )
-            endpoint_html = (
-                f'<div class="flag flag-endpoint">📊 <strong>Clinical endpoints reported:</strong> {endpoint_keys[akey]}</div>'
-                if akey in endpoint_keys else ""
-            )
+        oa_section = oa_cards if oa_cards else '<p class="no-results">No open-access articles found today.</p>'
 
-            cards += f"""
-            <div class="card"{highlight}>
-                <div class="source-tag">{a['source']}</div>
-                <h2><a href="{a['link']}">{a['title']}</a></h2>
-                <p class="meta">{a['authors']}</p>
-                <p class="meta journal">{a['journal']} &nbsp;·&nbsp; {a['date']}</p>
-                {abstract_html}
-                {sensitive_html}
-                {endpoint_html}
-                <a href="{a['link']}" class="read-link">Read full article →</a>
+        if pay_cards:
+            divider = f"""
+            <div class="divider">
+                <div class="divider-line"></div>
+                <div class="divider-label">🔒 Behind a Paywall — {len(paywalled_articles)} article{"s" if len(paywalled_articles) != 1 else ""}</div>
+                <div class="divider-line"></div>
             </div>"""
-        body_content = cards
+            pay_section = pay_cards
+        else:
+            divider = ""
+            pay_section = ""
+
+        body_content = oa_section + divider + pay_section
+
+    total = len(all_articles)
+    oa_count = len(oa_articles)
+    pay_count = len(paywalled_articles)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -495,6 +549,7 @@ def build_email_html(articles, today_str, search_config,
   .x-reasoning {{ font-size: 13px; color: #555; font-style: italic; margin-bottom: 14px; }}
   .x-button {{ display: inline-block; background: {header_color}; color: white; padding: 8px 18px;
                border-radius: 20px; text-decoration: none; font-size: 13px; font-weight: bold; }}
+  .post-label {{ font-size: 12px; font-weight: bold; color: #444; margin: 12px 0 6px 0; }}
   .card {{ margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid #eee; }}
   .card:last-child {{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }}
   .source-tag {{ display: inline-block; background: #e8f0f8; color: {header_color}; font-size: 11px;
@@ -508,6 +563,10 @@ def build_email_html(articles, today_str, search_config,
   .flag-sensitive {{ background: #fff8e1; border-left: 4px solid #f5a623; color: #7a5200; }}
   .flag-endpoint {{ background: #e8f5f0; border-left: 4px solid #2d6a4f; color: #1a4030; }}
   .read-link {{ font-size: 13px; color: #c0392b; text-decoration: none; font-weight: bold; }}
+  .paywall-link {{ font-size: 13px; color: #888; text-decoration: none; font-weight: normal; }}
+  .divider {{ display: flex; align-items: center; gap: 12px; margin: 32px 0; }}
+  .divider-line {{ flex: 1; height: 1px; background: #ccc; }}
+  .divider-label {{ font-size: 12px; color: #888; white-space: nowrap; font-weight: bold; }}
   .no-results {{ color: #555; font-size: 15px; padding: 20px 0; }}
   .footer {{ font-size: 11px; color: #aaa; text-align: center; margin-top: 20px; }}
 </style>
@@ -516,15 +575,15 @@ def build_email_html(articles, today_str, search_config,
 <div class="wrapper">
   <div class="header">
     <h1>{label} — Research Digest</h1>
-    <p>{today_str} &nbsp;·&nbsp; New open-access articles only</p>
+    <p>{today_str} &nbsp;·&nbsp; {total} new article{"s" if total != 1 else ""} — {oa_count} open access · {pay_count} paywalled</p>
   </div>
   <div class="body">
     {x_post_box}
     <p class="summary">
-      <strong>{len(articles)} new open-access article{"s" if len(articles) != 1 else ""}</strong>
-      found today across PubMed, Europe PMC, bioRxiv, medRxiv, and Semantic Scholar.
-      {f'The highlighted article is suggested for X.' if chosen_article and articles else ''}
-      {'&nbsp; ⚠️ = may be difficult for patients &nbsp; 📊 = reports clinical endpoints' if articles else ''}
+      <strong>{oa_count} open-access</strong> and <strong>{pay_count} paywalled</strong>
+      new article{"s" if total != 1 else ""} found today.
+      {f'Highlighted article (blue border) is suggested for posting.' if chosen_article and oa_articles else ''}
+      {'&nbsp; ⚠️ = may be difficult for patients &nbsp; 📊 = reports clinical endpoints' if all_articles else ''}
     </p>
     {body_content}
   </div>
@@ -565,23 +624,30 @@ def run_search(search_config, today_str):
     print(f"  Searching all sources...")
     all_articles = run_all_sources(terms)
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
-    print(f"  Total found (within date window): {len(all_articles)}")
 
+    # Filter to genuinely new articles
     new_articles = [a for a in all_articles if make_key(a) not in seen]
-    print(f"  Genuinely new (not previously sent): {len(new_articles)}")
 
-    chosen_article, ai_result = analyze_articles(new_articles, label)
+    # Split into open-access and paywalled
+    oa_articles        = [a for a in new_articles if a.get("open_access")]
+    paywalled_articles = [a for a in new_articles if not a.get("open_access")]
+
+    print(f"  Total found: {len(all_articles)} | New: {len(new_articles)} ({len(oa_articles)} OA, {len(paywalled_articles)} paywalled)")
+
+    # Claude analyzes all new articles but only selects from OA for the post
+    chosen_article, ai_result = analyze_articles(oa_articles, new_articles, label)
     sensitive_keys = ai_result.get("sensitive_keys", {}) if ai_result else {}
     endpoint_keys  = ai_result.get("endpoint_keys",  {}) if ai_result else {}
 
     html = build_email_html(
-        new_articles, today_str, search_config,
+        oa_articles, paywalled_articles, today_str, search_config,
         chosen_article, ai_result, sensitive_keys, endpoint_keys
     )
 
-    subject = f"{label} Digest — {today_str} ({len(new_articles)} new articles)"
+    subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled)"
     send_email(html, subject)
 
+    # Save only new articles to memory
     for a in new_articles:
         seen.add(make_key(a))
     save_seen(seen, seen_file)
