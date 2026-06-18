@@ -522,7 +522,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
         if pay_cards:
             divider = f"""
             <div class="divider">
-                <div class="divider-banner">🔒 BEHIND A PAYWALL — {len(paywalled_articles)} ARTICLE{"S" if len(paywalled_articles) != 1 else ""} — ABSTRACT ONLY</div>
+                <div class="divider-banner">🔒 &nbsp; BEHIND A PAYWALL &nbsp;·&nbsp; {len(paywalled_articles)} ARTICLE{"S" if len(paywalled_articles) != 1 else ""} &nbsp;·&nbsp; ABSTRACT ONLY &nbsp; 🔒</div>
             </div>"""
             pay_section = pay_cards
         else:
@@ -569,9 +569,10 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
   .flag-endpoint {{ background: #e8f5f0; border-left: 4px solid #2d6a4f; color: #1a4030; }}
   .read-link {{ font-size: 13px; color: #c0392b; text-decoration: none; font-weight: bold; }}
   .paywall-link {{ font-size: 13px; color: #888; text-decoration: none; font-weight: normal; }}
-  .divider {{ margin: 36px 0 28px 0; }}
-  .divider-banner {{ background: #2c2c2c; color: white; text-align: center; padding: 10px 16px;
-                    font-size: 13px; font-weight: bold; letter-spacing: 1px; border-radius: 4px; }}
+  .divider {{ margin: 40px 0 32px 0; }}
+  .divider-banner {{ background: #8b0000; color: white; text-align: center; padding: 16px 24px;
+                    font-size: 16px; font-weight: bold; letter-spacing: 2px; border-radius: 6px;
+                    border: 3px solid #5a0000; }}
   .no-results {{ color: #555; font-size: 15px; padding: 20px 0; }}
   .footer {{ font-size: 11px; color: #aaa; text-align: center; margin-top: 20px; }}
 </style>
