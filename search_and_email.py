@@ -521,9 +521,15 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
 
         if pay_cards:
             divider = f"""
-            <div class="divider">
-                <div class="divider-banner">🔒 &nbsp; BEHIND A PAYWALL &nbsp;·&nbsp; {len(paywalled_articles)} ARTICLE{"S" if len(paywalled_articles) != 1 else ""} &nbsp;·&nbsp; ABSTRACT ONLY &nbsp; 🔒</div>
-            </div>"""
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 40px 0 32px 0;">
+                <tr>
+                    <td bgcolor="#8b0000" style="background-color: #8b0000; padding: 16px 24px; text-align: center;">
+                        <span style="color: #ffffff; font-size: 16px; font-weight: bold; font-family: Georgia, serif; letter-spacing: 2px;">
+                            &#128274; &nbsp; BEHIND A PAYWALL &nbsp;&middot;&nbsp; {len(paywalled_articles)} ARTICLE{"S" if len(paywalled_articles) != 1 else ""} &nbsp;&middot;&nbsp; ABSTRACT ONLY &nbsp; &#128274;
+                        </span>
+                    </td>
+                </tr>
+            </table>"""
             pay_section = pay_cards
         else:
             divider = ""
