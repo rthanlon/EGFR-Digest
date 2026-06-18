@@ -99,12 +99,17 @@ def search_europe_pmc(term):
     data = fetch_json(url)
     if not data:
         return results
+    raw_count = len(data.get("resultList", {}).get("result", []))
+    recent_count = 0
+    print(f"    Europe PMC raw: {raw_count} total results returned")
     for item in data.get("resultList", {}).get("result", []):
         index_date = item.get("firstIndexDate", "") or item.get("firstPublicationDate", "")
         pub_date   = item.get("firstPublicationDate", "") or index_date
         if index_date and not is_recent(index_date):
             continue
+        recent_count += 1
         doi = item.get("doi")
+        pmcid = item.get("pmcid", "")
         # Determine if open access
         is_oa = item.get("isOpenAccess") == "Y"
         free_link = None
@@ -114,9 +119,14 @@ def search_europe_pmc(term):
                 free_link = link.get("url")
                 break
         open_access = is_oa or bool(free_link)
-        # Build best available link
-        article_link = free_link or (f"https://doi.org/{doi}" if doi else None)
-        if not article_link:
+        # Build best available link — for paywalled articles use DOI
+        if free_link:
+            article_link = free_link
+        elif pmcid:
+            article_link = f"https://europepmc.org/article/PMC/{pmcid}"
+        elif doi:
+            article_link = f"https://doi.org/{doi}"
+        else:
             continue
         results.append({
             "title": item.get("title", "Untitled").rstrip("."),
