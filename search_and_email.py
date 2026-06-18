@@ -100,14 +100,11 @@ def search_europe_pmc(term):
     if not data:
         return results
     raw_count = len(data.get("resultList", {}).get("result", []))
-    recent_count = 0
     print(f"    Europe PMC raw: {raw_count} total results returned")
     for item in data.get("resultList", {}).get("result", []):
-        index_date = item.get("firstIndexDate", "") or item.get("firstPublicationDate", "")
-        pub_date   = item.get("firstPublicationDate", "") or index_date
-        if index_date and not is_recent(index_date):
-            continue
-        recent_count += 1
+        # No date filter here — Europe PMC date fields are unreliable.
+        # The memory file (seen_*.json) prevents resending old articles.
+        pub_date = item.get("firstPublicationDate", "") or item.get("firstIndexDate", "")
         doi = item.get("doi")
         pmcid = item.get("pmcid", "")
         # Determine if open access
