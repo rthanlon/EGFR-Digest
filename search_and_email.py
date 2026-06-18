@@ -91,7 +91,11 @@ def is_recent(date_str):
 # ── Source searches ──────────────────────────────────────────────────────────
 def search_europe_pmc(term):
     results = []
-    query = urllib.parse.quote(f'"{term}" OPEN_ACCESS:Y')
+    # Removed strict OPEN_ACCESS:Y query filter — Europe PMC distinguishes
+    # "Open Access" (license-based) from "Free full text" (publicly readable).
+    # We want anything readable without a paywall, so we filter client-side
+    # using the broader fullTextUrlList check below instead.
+    query = urllib.parse.quote(f'"{term}"')
     cutoff = date_cutoff_str()
     url = (
         f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -103,17 +107,22 @@ def search_europe_pmc(term):
     if not data:
         return results
     for item in data.get("resultList", {}).get("result", []):
-        if item.get("isOpenAccess") != "Y":
-            continue
         # Verify date client-side as extra check
         pub_date = item.get("firstPublicationDate", "")
         if pub_date and not is_recent(pub_date):
             continue
+        # Broader free-to-read check: accept either the strict open-access
+        # flag OR any full-text link marked as freely available (covers
+        # PMC "free full text" articles that aren't tagged OPEN_ACCESS:Y).
+        is_oa = item.get("isOpenAccess") == "Y"
         pdf_url = None
         for link in item.get("fullTextUrlList", {}).get("fullTextUrl", []):
-            if link.get("documentStyle") in ("pdf", "html") and link.get("availability") == "Open access":
+            avail = (link.get("availability") or "").lower()
+            if link.get("documentStyle") in ("pdf", "html") and ("open access" in avail or "free" in avail):
                 pdf_url = link.get("url")
                 break
+        if not is_oa and not pdf_url:
+            continue
         doi = item.get("doi")
         link = pdf_url or (f"https://doi.org/{doi}" if doi else None)
         if not link:
