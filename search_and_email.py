@@ -143,17 +143,16 @@ def _fmt_authors_epmc(authors):
     return ", ".join(names) + (" et al." if len(authors) > 3 else "")
 
 def search_pubmed(term):
-    """Run two PubMed queries: all articles + free-full-text subset to flag open access."""
+    """Run two PubMed queries: all articles + free-full-text subset to flag open access.
+    No date filter — same approach as Europe PMC. Memory file prevents resending old articles.
+    retmax=500 ensures comprehensive coverage."""
     results = []
-    cutoff = date_cutoff_pubmed()
-    today = datetime.utcnow().strftime("%Y/%m/%d")
 
-    # Query 1: ALL articles matching the term in date range
+    # Query 1: ALL articles matching the term — no date filter, large result set
     query_all = urllib.parse.quote(f'"{term}"[Title/Abstract]')
     data_all = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        f"?db=pubmed&term={query_all}&mindate={cutoff}&maxdate={today}"
-        f"&datetype=pdat&retmax=50&retmode=json"
+        f"?db=pubmed&term={query_all}&retmax=500&retmode=json"
     )
     all_ids = set(data_all.get("esearchresult", {}).get("idlist", [])) if data_all else set()
 
@@ -163,8 +162,7 @@ def search_pubmed(term):
     query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
     data_free = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        f"?db=pubmed&term={query_free}&mindate={cutoff}&maxdate={today}"
-        f"&datetype=pdat&retmax=50&retmode=json"
+        f"?db=pubmed&term={query_free}&retmax=500&retmode=json"
     )
     free_ids = set(data_free.get("esearchresult", {}).get("idlist", [])) if data_free else set()
 
