@@ -85,16 +85,28 @@ def is_recent(date_str):
     except Exception:
         return True
 
+def is_within_days(date_str, days):
+    """Check if a date string falls within the last N days."""
+    if not date_str:
+        return True  # include if date unknown
+    try:
+        if len(date_str) == 4:
+            cutoff_year = (datetime.utcnow() - timedelta(days=days)).year
+            return int(date_str) >= cutoff_year
+        pub_date = datetime.strptime(date_str[:10], "%Y-%m-%d")
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        return pub_date >= cutoff
+    except Exception:
+        return True  # include if we can't parse the date
+
 # ── Source searches — return ALL articles with open_access flag ───────────────
 def search_europe_pmc(term):
     results = []
-    # Europe PMC supports FIRST_PDATE range in the query string itself.
-    # Format: FIRST_PDATE:[YYYY-MM-DD TO YYYY-MM-DD]
-    # This is more reliable than fromDate/toDate URL parameters.
-    cutoff = date_cutoff_str()
-    today  = datetime.utcnow().strftime("%Y-%m-%d")
-    date_filter = urllib.parse.quote(f' AND FIRST_PDATE:[{cutoff} TO {today}]')
-    query = urllib.parse.quote(f'"{term}"') + date_filter
+    # Europe PMC: fetch large page sorted newest first, filter client-side.
+    # API date params are unreliable; we use a 30-day client-side window
+    # against firstPublicationDate to catch recent articles, with the
+    # memory file as the final gate against resending old articles.
+    query = urllib.parse.quote(f'"{term}"')
     url = (
         f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
         f"?query={query}&resultType=core&pageSize=250&format=json"
@@ -106,9 +118,12 @@ def search_europe_pmc(term):
     raw_count = len(data.get("resultList", {}).get("result", []))
     print(f"    Europe PMC raw: {raw_count} total results returned")
     for item in data.get("resultList", {}).get("result", []):
-        # No date filter here — Europe PMC date fields are unreliable.
-        # The memory file (seen_*.json) prevents resending old articles.
+        # Client-side date filter: keep articles published in last 30 days.
+        # Wide window ensures we don't miss recently published articles.
+        # Memory file prevents resending anything already sent.
         pub_date = item.get("firstPublicationDate", "") or item.get("firstIndexDate", "")
+        if pub_date and not is_within_days(pub_date, 30):
+            continue
         doi = item.get("doi")
         pmcid = item.get("pmcid", "")
         # Determine if open access
@@ -151,27 +166,29 @@ def search_pubmed(term):
     Uses datetype=edat (entrez date = when PubMed indexed it) which is reliable for
     catching newly added articles. Memory file prevents resending duplicates."""
     results = []
-    cutoff = date_cutoff_pubmed()
-    today  = datetime.utcnow().strftime("%Y/%m/%d")
+    # PubMed: use 30-day window with datetype=edat (entrez date = when
+    # PubMed indexed it). This is the most reliable PubMed date parameter.
+    cutoff_30 = (datetime.utcnow() - timedelta(days=30)).strftime("%Y/%m/%d")
+    today     = datetime.utcnow().strftime("%Y/%m/%d")
 
-    # Query 1: ALL articles indexed by PubMed in the last DAYS_BACK days
+    # Query 1: ALL articles indexed by PubMed in last 30 days
     query_all = urllib.parse.quote(f'"{term}"[Title/Abstract]')
     data_all = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         f"?db=pubmed&term={query_all}"
-        f"&mindate={cutoff}&maxdate={today}&datetype=edat"
-        f"&retmax=200&retmode=json"
+        f"&mindate={cutoff_30}&maxdate={today}&datetype=edat"
+        f"&retmax=200&retmode=json&sort=date"
     )
     all_ids = set(data_all.get("esearchresult", {}).get("idlist", [])) if data_all else set()
 
     time.sleep(0.4)
 
-    # Query 2: free full text only — same date window — to identify open access
+    # Query 2: free full text in same window — to identify open access
     query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
     data_free = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         f"?db=pubmed&term={query_free}"
-        f"&mindate={cutoff}&maxdate={today}&datetype=edat"
+        f"&mindate={cutoff_30}&maxdate={today}&datetype=edat"
         f"&retmax=200&retmode=json"
     )
     free_ids = set(data_free.get("esearchresult", {}).get("idlist", [])) if data_free else set()
