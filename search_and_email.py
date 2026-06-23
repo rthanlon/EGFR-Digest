@@ -88,9 +88,13 @@ def is_recent(date_str):
 # ── Source searches — return ALL articles with open_access flag ───────────────
 def search_europe_pmc(term):
     results = []
-    query = urllib.parse.quote(f'"{term}"')
-    # Europe PMC ignores fromDate/toDate, so fetch large page sorted newest
-    # first and filter client-side by firstIndexDate.
+    # Europe PMC supports FIRST_PDATE range in the query string itself.
+    # Format: FIRST_PDATE:[YYYY-MM-DD TO YYYY-MM-DD]
+    # This is more reliable than fromDate/toDate URL parameters.
+    cutoff = date_cutoff_str()
+    today  = datetime.utcnow().strftime("%Y-%m-%d")
+    date_filter = urllib.parse.quote(f' AND FIRST_PDATE:[{cutoff} TO {today}]')
+    query = urllib.parse.quote(f'"{term}"') + date_filter
     url = (
         f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
         f"?query={query}&resultType=core&pageSize=250&format=json"
@@ -144,25 +148,31 @@ def _fmt_authors_epmc(authors):
 
 def search_pubmed(term):
     """Run two PubMed queries: all articles + free-full-text subset to flag open access.
-    No date filter — same approach as Europe PMC. Memory file prevents resending old articles.
-    retmax=500 ensures comprehensive coverage."""
+    Uses datetype=edat (entrez date = when PubMed indexed it) which is reliable for
+    catching newly added articles. Memory file prevents resending duplicates."""
     results = []
+    cutoff = date_cutoff_pubmed()
+    today  = datetime.utcnow().strftime("%Y/%m/%d")
 
-    # Query 1: ALL articles matching the term — no date filter, large result set
+    # Query 1: ALL articles indexed by PubMed in the last DAYS_BACK days
     query_all = urllib.parse.quote(f'"{term}"[Title/Abstract]')
     data_all = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        f"?db=pubmed&term={query_all}&retmax=500&retmode=json"
+        f"?db=pubmed&term={query_all}"
+        f"&mindate={cutoff}&maxdate={today}&datetype=edat"
+        f"&retmax=200&retmode=json"
     )
     all_ids = set(data_all.get("esearchresult", {}).get("idlist", [])) if data_all else set()
 
     time.sleep(0.4)
 
-    # Query 2: free full text only — to identify which are open access
+    # Query 2: free full text only — same date window — to identify open access
     query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
     data_free = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-        f"?db=pubmed&term={query_free}&retmax=500&retmode=json"
+        f"?db=pubmed&term={query_free}"
+        f"&mindate={cutoff}&maxdate={today}&datetype=edat"
+        f"&retmax=200&retmode=json"
     )
     free_ids = set(data_free.get("esearchresult", {}).get("idlist", [])) if data_free else set()
 
