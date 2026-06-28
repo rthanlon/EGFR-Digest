@@ -43,36 +43,6 @@ SEARCHES = [
 ]
 
 
-# ── RSS Feed Configuration ────────────────────────────────────────────────────
-# Clinical news sources that carry EGFR/HER2 content not in academic databases
-RSS_FEEDS = [
-    {
-        "name": "Targeted Oncology",
-        "url": "https://www.targetedonc.com/rss/clinical/lung",
-        "fallback": "https://www.targetedonc.com/rss",
-    },
-    {
-        "name": "OncLive",
-        "url": "https://www.onclive.com/rss/clinical/lung-cancer",
-        "fallback": "https://www.onclive.com/rss",
-    },
-    {
-        "name": "Medscape Oncology",
-        "url": "https://www.medscape.com/rss/oncology",
-        "fallback": None,
-    },
-    {
-        "name": "NCI Cancer News",
-        "url": "https://www.cancer.gov/syndication/rss",
-        "fallback": None,
-    },
-]
-
-# Terms to match against RSS article titles/descriptions (case-insensitive)
-RSS_EGFR_TERMS = ["egfr exon 20", "exon 20 insertion", "egfr ex20", "sunvozertinib",
-                   "amivantamab", "mobocertinib", "zipalertinib", "zegfrovy"]
-RSS_HER2_TERMS = ["her2 exon 20", "erbb2 exon 20", "her2-mutant nsclc", "her2 mutant lung",
-                  "trastuzumab deruxtecan", "zongertinib", "hernexeos"]
 
 # ── Seen Articles Tracker ─────────────────────────────────────────────────────
 def load_seen(seen_file):
@@ -330,76 +300,6 @@ def search_semantic_scholar(term):
     print(f"    Semantic Scholar: {len(results)} results ({oa_count} open access)")
     return results
 
-# ── RSS Feed Search ──────────────────────────────────────────────────────────
-def fetch_rss(url):
-    """Fetch and parse an RSS feed, returning list of (title, link, date, description)."""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = resp.read()
-        root = ET.fromstring(data)
-        items = []
-        # Handle both RSS 2.0 and Atom formats
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-        for item in root.findall(".//item"):
-            title = item.findtext("title", "").strip()
-            link  = item.findtext("link", "").strip()
-            desc  = item.findtext("description", "").strip()
-            pub   = item.findtext("pubDate", "").strip()
-            items.append((title, link, pub, desc))
-        return items
-    except Exception as e:
-        print(f"    RSS fetch failed for {url[:60]}... → {e}")
-        return []
-
-def search_rss_feeds(match_terms, search_label):
-    """Search all RSS feeds for articles matching any of the given terms."""
-    results = []
-    seen_links = set()
-    cutoff = datetime.utcnow() - timedelta(days=30)
-
-    for feed in RSS_FEEDS:
-        items = fetch_rss(feed["url"])
-        if not items and feed.get("fallback"):
-            items = fetch_rss(feed["fallback"])
-        if not items:
-            continue
-
-        matched = 0
-        for title, link, pub_date, desc in items:
-            text = (title + " " + desc).lower()
-            if not any(t.lower() in text for t in match_terms):
-                continue
-            if link in seen_links:
-                continue
-            # Parse date if possible
-            date_str = ""
-            try:
-                from email.utils import parsedate_to_datetime
-                dt = parsedate_to_datetime(pub_date)
-                if dt.replace(tzinfo=None) < cutoff:
-                    continue
-                date_str = dt.strftime("%Y-%m-%d")
-            except Exception:
-                pass  # Include if we can't parse the date
-            seen_links.add(link)
-            matched += 1
-            results.append({
-                "title": title,
-                "authors": "",
-                "journal": feed["name"],
-                "date": date_str,
-                "link": link,
-                "source": feed["name"],
-                "abstract": desc[:400] if desc else "",
-                "open_access": True,  # Clinical news is always free
-                "is_news": True,
-            })
-        if matched:
-            print(f"    {feed['name']}: {matched} matching articles")
-
-    print(f"  RSS feeds total: {len(results)} clinical news articles")
-    return results
 
 # ── Run all sources for a list of terms (OR logic) ───────────────────────────
 def run_all_sources(terms):
@@ -618,6 +518,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             f'<div class="flag flag-endpoint">📊 <strong>Clinical endpoints reported:</strong> {endpoint_keys[akey]}</div>'
             if akey in endpoint_keys else ""
         )
+        oa_label = ' &nbsp;<span style="color: #2d6a4f; font-size: 12px; font-weight: bold;">(open access)</span>' if section == "oa" else ""
         if section == "oa":
             action = f'<a href="{a["link"]}" class="read-link">Read full article →</a>'
         elif section == "news":
@@ -630,7 +531,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             <div class="source-tag">{a['source']}</div>
             <h2><a href="{a['link']}">{a['title']}</a></h2>
             <p class="meta">{a['authors']}</p>
-            <p class="meta journal">{a['journal']} &nbsp;·&nbsp; {a['date']}</p>
+            <p class="meta journal">{a['journal']} &nbsp;·&nbsp; {a['date']}{oa_label}</p>
             {abstract_html}
             {sensitive_html}
             {endpoint_html}
@@ -796,13 +697,7 @@ def run_search(search_config, today_str):
 
     print(f"  Total found: {len(all_articles)} | New: {len(new_articles)} ({len(oa_articles)} OA, {len(paywalled_articles)} paywalled)")
 
-    # Search RSS feeds for clinical news
-    short_label = search_config.get("short_label", "EGFR")
-    rss_terms = RSS_EGFR_TERMS if short_label == "EGFR" else RSS_HER2_TERMS
-    print(f"  Searching clinical news RSS feeds...")
-    news_articles = search_rss_feeds(rss_terms, label)
-    # Filter news articles already seen
-    news_articles = [a for a in news_articles if make_key(a) not in seen]
+    news_articles = []  # RSS feeds removed (403 blocks)
 
     # Claude analyzes all new articles but only selects from OA academic for the post
     chosen_article, ai_result = analyze_articles(oa_articles, new_articles, label)
@@ -815,13 +710,11 @@ def run_search(search_config, today_str):
         news_articles=news_articles
     )
 
-    subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled · {len(news_articles)} news)"
+    subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled)"
     send_email(html, subject)
 
-    # Save all sent articles to memory (academic + news)
+    # Save sent articles to memory
     for a in new_articles:
-        seen.add(make_key(a))
-    for a in news_articles:
         seen.add(make_key(a))
     save_seen(seen, seen_file)
     print(f"  Memory updated: {len(seen)} total articles tracked.")
