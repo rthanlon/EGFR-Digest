@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 # ── Configuration ────────────────────────────────────────────────────────────
 DAYS_BACK        = 5
-TO_EMAIL         = "robertthanlon@gmail.com"
+TO_EMAIL         = "marcia@askican.org"
 FROM_EMAIL       = "digest@resend.dev"
 RESEND_API_KEY   = os.environ["RESEND_API_KEY"]
 ANTHROPIC_API_KEY        = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -652,7 +652,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
   <div class="footer">
     Academic: PubMed · Europe PMC · bioRxiv · medRxiv · Semantic Scholar<br>
     Clinical News: Targeted Oncology · OncLive · Medscape · NCI<br>
-    Sent automatically to robertthanlon@gmail.com · Exon 20 Group Research Monitor
+    Sent automatically to marcia@askican.org · Exon 20 Group Research Monitor
   </div>
 </div>
 </body>
@@ -704,14 +704,17 @@ def run_search(search_config, today_str):
     sensitive_keys = ai_result.get("sensitive_keys", {}) if ai_result else {}
     endpoint_keys  = ai_result.get("endpoint_keys",  {}) if ai_result else {}
 
-    html = build_email_html(
-        oa_articles, paywalled_articles, today_str, search_config,
-        chosen_article, ai_result, sensitive_keys, endpoint_keys,
-        news_articles=news_articles
-    )
-
-    subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled)"
-    send_email(html, subject)
+    total_new = len(oa_articles) + len(paywalled_articles)
+    if total_new == 0:
+        print(f"  No new articles — skipping email to avoid cluttering inbox.")
+    else:
+        html = build_email_html(
+            oa_articles, paywalled_articles, today_str, search_config,
+            chosen_article, ai_result, sensitive_keys, endpoint_keys,
+            news_articles=news_articles
+        )
+        subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled)"
+        send_email(html, subject)
 
     # Save sent articles to memory
     for a in new_articles:
