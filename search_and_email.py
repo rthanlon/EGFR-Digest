@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 # ── Configuration ────────────────────────────────────────────────────────────
 DAYS_BACK        = 5
-TO_EMAIL         = "marcia@askican.org"
+TO_EMAIL         = "robertthanlon@gmail.com"
 FROM_EMAIL       = "digest@resend.dev"
 RESEND_API_KEY   = os.environ["RESEND_API_KEY"]
 ANTHROPIC_API_KEY        = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -652,7 +652,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
   <div class="footer">
     Academic: PubMed · Europe PMC · bioRxiv · medRxiv · Semantic Scholar<br>
     Clinical News: Targeted Oncology · OncLive · Medscape · NCI<br>
-    Sent automatically to marcia@askican.org · Exon 20 Group Research Monitor
+    Sent automatically to robertthanlon@gmail.com (forwarded to marcia@askican.org) · Exon 20 Group Research Monitor
   </div>
 </div>
 </body>
