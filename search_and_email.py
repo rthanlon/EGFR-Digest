@@ -127,7 +127,7 @@ def is_within_days(date_str, days):
         return True  # include if we can't parse the date
 
 # ── Source searches — return ALL articles with open_access flag ───────────────
-def search_europe_pmc(term):
+def search_europe_pmc(term, days=30):
     results = []
     # Europe PMC: fetch large page sorted newest first, filter client-side.
     # API date params are unreliable; we use a 30-day client-side window
@@ -149,7 +149,7 @@ def search_europe_pmc(term):
         # Wide window ensures we don't miss recently published articles.
         # Memory file prevents resending anything already sent.
         pub_date = item.get("firstPublicationDate", "") or item.get("firstIndexDate", "")
-        if pub_date and not is_within_days(pub_date, 30):
+        if pub_date and not is_within_days(pub_date, days):
             continue
         doi = item.get("doi")
         pmcid = item.get("pmcid", "")
@@ -326,11 +326,11 @@ def search_semantic_scholar(term):
 
 
 # ── Run all sources for a list of terms (OR logic) ───────────────────────────
-def run_all_sources(terms):
+def run_all_sources(terms, epmc_days=30):
     all_results = []
     for term in terms:
         print(f"  Searching for: '{term}'")
-        all_results += search_europe_pmc(term)
+        all_results += search_europe_pmc(term, days=epmc_days)
         all_results += search_pubmed(term)
         all_results += _search_rxiv("biorxiv", term)
         all_results += _search_rxiv("medrxiv", term)
@@ -790,7 +790,9 @@ def run_search(search_config, today_str):
     print(f"  Previously seen: {len(seen)} articles")
 
     print(f"  Searching academic sources...")
-    all_articles = run_all_sources(terms)
+    is_opp = search_config.get("is_opportunity_scan", False)
+    epmc_days = 90 if is_opp else 30
+    all_articles = run_all_sources(terms, epmc_days=epmc_days)
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
     # Filter to genuinely new articles
