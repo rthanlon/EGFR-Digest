@@ -40,6 +40,30 @@ SEARCHES = [
         "seen_file": "seen_her2.json",
         "header_color": "#2d6a4f",
     },
+    {
+        "label": "Oncology Breakthroughs — Exon 20 Opportunity Scan",
+        "short_label": "OPP",
+        "terms": [
+            "antibody-drug conjugate lung cancer",
+            "bispecific antibody NSCLC",
+            "PROTAC lung cancer",
+            "molecular glue cancer",
+            "EGFR resistance mechanism",
+            "HER2 resistance NSCLC",
+            "kinase inhibitor resistance lung cancer",
+            "novel targeted therapy NSCLC",
+            "immune checkpoint TKI combination lung cancer",
+            "EGFR structural biology",
+            "CAR-T cell lung cancer",
+            "tumor microenvironment NSCLC",
+            "immunotherapy resistance lung cancer",
+            "PD-1 PD-L1 EGFR lung cancer",
+            "neoantigen lung cancer immunotherapy",
+        ],
+        "seen_file": "seen_opp.json",
+        "header_color": "#6b3a00",
+        "is_opportunity_scan": True,
+    },
 ]
 
 
@@ -351,7 +375,56 @@ Article {i+1} {oa_label}:
   Link: {a['link']}
 """
 
-    prompt = f"""You are helping the Exon 20 Group, a patient advocacy organization focused on thoracic oncology mutations including EGFR exon 20 insertion and HER2/ERBB2 alterations in lung cancer.
+    # Use different prompt for opportunity scan vs standard searches
+    is_opp_scan = search_label == "Oncology Breakthroughs — Exon 20 Opportunity Scan"
+
+    if is_opp_scan:
+        prompt = f"""You are a scientific advisor to the Exon 20 Group, a patient advocacy organization focused on solving the EGFR exon 20 insertion and HER2/ERBB2 exon 20 mutation problem in lung cancer.
+
+The Exon 20 Group is specifically interested in breakthroughs that could:
+- Overcome resistance to current EGFR exon 20 treatments (amivantamab, sunvozertinib)
+- Improve selectivity of drugs targeting exon 20 insertions over wild-type EGFR
+- Apply novel drug modalities (ADCs, bispecifics, PROTACs, molecular glues) to exon 20 mutations
+- Leverage immunotherapy (CAR-T, checkpoint inhibitors, tumor microenvironment modulation) in combination with targeted therapy
+- Illuminate new biology relevant to exon 20 insertion structural dynamics or resistance mechanisms
+
+Here are today's new research articles from a broad oncology breakthrough scan:
+
+{article_list}
+
+Your tasks:
+
+1. Screen ALL articles and identify those with GENUINE potential relevance to the exon 20 insertion problem. Be discriminating — only flag articles where you can articulate a specific, plausible mechanistic connection to exon 20 biology or treatment. Exclude articles that are only superficially related to lung cancer or oncology in general.
+
+2. For each article you identify as potentially relevant, write:
+   - A plain-English explanation (2-3 sentences) of what the finding is
+   - A plain-English explanation (2-3 sentences) of WHY it might matter specifically for the exon 20 problem
+   - A confidence level: HIGH, MEDIUM, or LOW (be honest — most will be LOW or MEDIUM)
+
+3. From the relevant articles, select the single most promising one and write THREE post summaries under 240 characters each (link added separately), ending with #EGFRExon20 #LungCancer, written for a patient and advocate audience.
+
+4. If NO articles show genuine relevance, say so honestly — do not force relevance where none exists.
+
+Respond in this exact JSON format with no other text:
+{{
+  "chosen_article_index": <number, 1-based, or null if none are relevant>,
+  "post_1": "<factual summary, no link, or empty string if none relevant>",
+  "post_2": "<patient-centered angle, no link, or empty string if none relevant>",
+  "post_3": "<broader context, no link, or empty string if none relevant>",
+  "reasoning": "<one sentence explaining your top pick, or 'No articles with clear relevance to exon 20 found today'>",
+  "opportunity_articles": [
+    {{
+      "article_index": <number, 1-based>,
+      "finding": "<2-3 sentences: what the article found>",
+      "relevance": "<2-3 sentences: why this might matter for exon 20>",
+      "confidence": "<HIGH, MEDIUM, or LOW>"
+    }}
+  ],
+  "sensitive_articles": [],
+  "endpoint_articles": []
+}}"""
+    else:
+        prompt = f"""You are helping the Exon 20 Group, a patient advocacy organization focused on thoracic oncology mutations including EGFR exon 20 insertion and HER2/ERBB2 alterations in lung cancer.
 
 Today's search: {search_label}
 
@@ -447,8 +520,22 @@ Respond in this exact JSON format with no other text:
             if endpoint_keys:
                 print(f"  Flagged {len(endpoint_keys)} articles with clinical endpoints.")
 
+            # Build opportunity_keys for opportunity scan
+            opportunity_keys = {}
+            for o in result.get("opportunity_articles", []):
+                oidx = o.get("article_index", 0) - 1
+                if 0 <= oidx < len(combined):
+                    opportunity_keys[make_key(combined[oidx])] = {
+                        "finding": o.get("finding", ""),
+                        "relevance": o.get("relevance", ""),
+                        "confidence": o.get("confidence", "LOW"),
+                    }
+            if opportunity_keys:
+                print(f"  Identified {len(opportunity_keys)} potentially relevant opportunity articles.")
+
             result["sensitive_keys"] = sensitive_keys
             result["endpoint_keys"] = endpoint_keys
+            result["opportunity_keys"] = opportunity_keys
             return chosen, result
 
     except Exception as e:
@@ -459,10 +546,11 @@ Respond in this exact JSON format with no other text:
 def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
                      chosen_article=None, ai_result=None,
                      sensitive_keys=None, endpoint_keys=None,
-                     news_articles=None):
+                     news_articles=None, opportunity_keys=None):
 
-    sensitive_keys = sensitive_keys or {}
-    endpoint_keys  = endpoint_keys  or {}
+    sensitive_keys  = sensitive_keys  or {}
+    endpoint_keys   = endpoint_keys   or {}
+    opportunity_keys = opportunity_keys or {}
     header_color   = search_config["header_color"]
     label          = search_config["label"]
     short_label    = search_config.get("short_label", label)
@@ -518,6 +606,16 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             f'<div class="flag flag-endpoint">📊 <strong>Clinical endpoints reported:</strong> {endpoint_keys[akey]}</div>'
             if akey in endpoint_keys else ""
         )
+        if akey in opportunity_keys:
+            opp = opportunity_keys[akey]
+            conf_color = {"HIGH": "#1a5c2a", "MEDIUM": "#6b3a00", "LOW": "#555"}.get(opp["confidence"], "#555")
+            opportunity_html = f'''<div class="flag flag-opportunity">
+                🔬 <strong>Exon 20 Opportunity [{opp["confidence"]} confidence]</strong><br>
+                <strong>Finding:</strong> {opp["finding"]}<br>
+                <strong>Potential relevance:</strong> {opp["relevance"]}
+            </div>'''
+        else:
+            opportunity_html = ""
         oa_label = ' &nbsp;<span style="color: #2d6a4f; font-size: 12px; font-weight: bold;">(open access)</span>' if section == "oa" else ""
         if section == "oa":
             action = f'<a href="{a["link"]}" class="read-link">Read full article →</a>'
@@ -535,6 +633,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             {abstract_html}
             {sensitive_html}
             {endpoint_html}
+            {opportunity_html}
             {action}
         </div>"""
 
@@ -623,6 +722,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
   .flag {{ border-radius: 4px; font-size: 13px; padding: 10px 14px; margin: 8px 0; }}
   .flag-sensitive {{ background: #fff8e1; border-left: 4px solid #f5a623; color: #7a5200; }}
   .flag-endpoint {{ background: #e8f5f0; border-left: 4px solid #2d6a4f; color: #1a4030; }}
+  .flag-opportunity {{ background: #f0e8ff; border-left: 4px solid #6b3a8b; color: #3a1a5c; line-height: 1.6; }}
   .read-link {{ font-size: 13px; color: #c0392b; text-decoration: none; font-weight: bold; }}
   .paywall-link {{ font-size: 13px; color: #888; text-decoration: none; font-weight: normal; }}
   .divider {{ margin: 40px 0 32px 0; }}
