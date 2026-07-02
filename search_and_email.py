@@ -791,7 +791,10 @@ def run_search(search_config, today_str):
 
     print(f"  Searching academic sources...")
     is_opp = search_config.get("is_opportunity_scan", False)
-    epmc_days = 90 if is_opp else 30
+    # For opportunity scan: no date filter (Europe PMC date fields unreliable
+    # for broad terms). Memory file prevents resending old articles.
+    # For EGFR/HER2: 30-day window works reliably.
+    epmc_days = 36500 if is_opp else 30  # 36500 days ≈ 100 years = effectively no filter
     all_articles = run_all_sources(terms, epmc_days=epmc_days)
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
