@@ -356,6 +356,13 @@ def analyze_articles(oa_articles, all_articles, search_label):
     if not ANTHROPIC_API_KEY or not all_articles:
         return None, None
 
+    is_opp_scan = search_label == "Oncology Breakthroughs — Exon 20 Opportunity Scan"
+
+    # For standard searches, skip Claude if there are no open-access articles
+    if not is_opp_scan and not oa_articles:
+        print(f"  No open-access articles — skipping Claude analysis.")
+        return None, None
+
     print(f"  Asking Claude to analyze {len(all_articles)} articles ({len(oa_articles)} open access)...")
 
     # Build article list — OA articles first, then paywalled
@@ -376,8 +383,6 @@ Article {i+1} {oa_label}:
 """
 
     # Use different prompt for opportunity scan vs standard searches
-    is_opp_scan = search_label == "Oncology Breakthroughs — Exon 20 Opportunity Scan"
-
     if is_opp_scan:
         prompt = f"""You are a scientific advisor to the Exon 20 Group, a patient advocacy organization focused on solving the EGFR exon 20 insertion and HER2/ERBB2 exon 20 mutation problem in lung cancer.
 
