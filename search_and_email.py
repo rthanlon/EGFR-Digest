@@ -397,34 +397,26 @@ Here are today's new research articles from a broad oncology breakthrough scan:
 
 {article_list}
 
-Your tasks:
+For EVERY article, provide:
+1. A plain-English summary (2-3 sentences) of what the article found or reports
+2. A brief note (1-2 sentences) on its potential relevance to EGFR/HER2 exon 20 research — be honest if relevance is low or indirect. If there is no plausible connection, say so plainly rather than forcing one.
 
-1. Screen ALL articles and identify those with GENUINE potential relevance to the exon 20 insertion problem. Be discriminating — only flag articles where you can articulate a specific, plausible mechanistic connection to exon 20 biology or treatment. Exclude articles that are only superficially related to lung cancer or oncology in general.
-
-2. For each article you identify as potentially relevant, write:
-   - A plain-English explanation (2-3 sentences) of what the finding is
-   - A plain-English explanation (2-3 sentences) of WHY it might matter specifically for the exon 20 problem
-   - A confidence level: HIGH, MEDIUM, or LOW (be honest — most will be LOW or MEDIUM)
-
-3. From the relevant articles, select the single most promising one and write THREE post summaries under 240 characters each (link added separately), ending with #EGFRExon20 #LungCancer, written for a patient and advocate audience.
-
-4. If NO articles show genuine relevance, say so honestly — do not force relevance where none exists.
+Be concise and direct. This output is for a technically sophisticated audience (researchers, oncologists, advocates) — not for patients or social media.
 
 Respond in this exact JSON format with no other text:
 {{
-  "chosen_article_index": <number, 1-based, or null if none are relevant>,
-  "post_1": "<factual summary, no link, or empty string if none relevant>",
-  "post_2": "<patient-centered angle, no link, or empty string if none relevant>",
-  "post_3": "<broader context, no link, or empty string if none relevant>",
-  "reasoning": "<one sentence explaining your top pick, or 'No articles with clear relevance to exon 20 found today'>",
-  "opportunity_articles": [
+  "articles": [
     {{
       "article_index": <number, 1-based>,
-      "finding": "<2-3 sentences: what the article found>",
-      "relevance": "<2-3 sentences: why this might matter for exon 20>",
-      "confidence": "<HIGH, MEDIUM, or LOW>"
+      "summary": "<2-3 sentence plain-English summary of the finding>",
+      "exon20_relevance": "<1-2 sentences on relevance to exon 20 research, or 'Limited direct relevance to exon 20.' if none>"
     }}
   ],
+  "chosen_article_index": null,
+  "post_1": "",
+  "post_2": "",
+  "post_3": "",
+  "reasoning": "",
   "sensitive_articles": [],
   "endpoint_articles": []
 }}"""
@@ -525,22 +517,22 @@ Respond in this exact JSON format with no other text:
             if endpoint_keys:
                 print(f"  Flagged {len(endpoint_keys)} articles with clinical endpoints.")
 
-            # Build opportunity_keys for opportunity scan
-            opportunity_keys = {}
-            for o in result.get("opportunity_articles", []):
-                oidx = o.get("article_index", 0) - 1
-                if 0 <= oidx < len(combined):
-                    opportunity_keys[make_key(combined[oidx])] = {
-                        "finding": o.get("finding", ""),
-                        "relevance": o.get("relevance", ""),
-                        "confidence": o.get("confidence", "LOW"),
+            # Build article_summaries dict for opportunity scan
+            article_summaries = {}
+            for a in result.get("articles", []):
+                aidx = a.get("article_index", 0) - 1
+                if 0 <= aidx < len(combined):
+                    article_summaries[make_key(combined[aidx])] = {
+                        "summary": a.get("summary", ""),
+                        "exon20_relevance": a.get("exon20_relevance", ""),
                     }
-            if opportunity_keys:
-                print(f"  Identified {len(opportunity_keys)} potentially relevant opportunity articles.")
+            if article_summaries:
+                print(f"  Generated summaries for {len(article_summaries)} articles.")
 
             result["sensitive_keys"] = sensitive_keys
             result["endpoint_keys"] = endpoint_keys
-            result["opportunity_keys"] = opportunity_keys
+            result["opportunity_keys"] = {}
+            result["article_summaries"] = article_summaries
             return chosen, result
 
     except Exception as e:
@@ -551,18 +543,21 @@ Respond in this exact JSON format with no other text:
 def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
                      chosen_article=None, ai_result=None,
                      sensitive_keys=None, endpoint_keys=None,
-                     news_articles=None, opportunity_keys=None):
+                     news_articles=None, opportunity_keys=None,
+                     article_summaries=None):
 
-    sensitive_keys  = sensitive_keys  or {}
-    endpoint_keys   = endpoint_keys   or {}
+    sensitive_keys   = sensitive_keys   or {}
+    endpoint_keys    = endpoint_keys    or {}
     opportunity_keys = opportunity_keys or {}
+    article_summaries = article_summaries or {}
+    is_opp_scan = search_config.get("is_opportunity_scan", False)
     header_color   = search_config["header_color"]
     label          = search_config["label"]
     short_label    = search_config.get("short_label", label)
     all_articles   = oa_articles + paywalled_articles
 
-    # ── X Post Draft Box ──
-    if chosen_article and ai_result:
+    # ── X Post Draft Box — hidden for opportunity scan ──
+    if chosen_article and ai_result and not is_opp_scan:
         link      = chosen_article['link']
         post_1    = ai_result.get("post_1", "")
         post_2    = ai_result.get("post_2", "")
@@ -603,23 +598,26 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
         )
         is_chosen = chosen_article and akey == make_key(chosen_article)
         highlight = f' style="border-left: 4px solid {header_color}; padding-left: 16px;"' if is_chosen else ""
-        sensitive_html = (
-            f'<div class="flag flag-sensitive">⚠️ <strong>Heads up:</strong> {sensitive_keys[akey]}</div>'
-            if akey in sensitive_keys else ""
-        )
-        endpoint_html = (
-            f'<div class="flag flag-endpoint">📊 <strong>Clinical endpoints reported:</strong> {endpoint_keys[akey]}</div>'
-            if akey in endpoint_keys else ""
-        )
-        if akey in opportunity_keys:
-            opp = opportunity_keys[akey]
-            conf_color = {"HIGH": "#1a5c2a", "MEDIUM": "#6b3a00", "LOW": "#555"}.get(opp["confidence"], "#555")
-            opportunity_html = f'''<div class="flag flag-opportunity">
-                🔬 <strong>Exon 20 Opportunity [{opp["confidence"]} confidence]</strong><br>
-                <strong>Finding:</strong> {opp["finding"]}<br>
-                <strong>Potential relevance:</strong> {opp["relevance"]}
-            </div>'''
+        if is_opp_scan:
+            # Opportunity scan: show per-article summaries, no patient flags
+            sensitive_html = ""
+            endpoint_html = ""
+            opportunity_html = ""
+            if akey in article_summaries:
+                s = article_summaries[akey]
+                opportunity_html = f'''<div class="flag flag-opportunity">
+                    <strong>Summary:</strong> {s["summary"]}<br>
+                    <strong>Exon 20 relevance:</strong> {s["exon20_relevance"]}
+                </div>'''
         else:
+            sensitive_html = (
+                f'<div class="flag flag-sensitive">⚠️ <strong>Heads up:</strong> {sensitive_keys[akey]}</div>'
+                if akey in sensitive_keys else ""
+            )
+            endpoint_html = (
+                f'<div class="flag flag-endpoint">📊 <strong>Clinical endpoints reported:</strong> {endpoint_keys[akey]}</div>'
+                if akey in endpoint_keys else ""
+            )
             opportunity_html = ""
         oa_label = ' &nbsp;<span style="color: #2d6a4f; font-size: 12px; font-weight: bold;">(open access)</span>' if section == "oa" else ""
         if section == "oa":
@@ -750,7 +748,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
       <strong>{oa_count} open-access</strong> and <strong>{pay_count} paywalled</strong>
       new article{"s" if total != 1 else ""} found today.
       {f'Highlighted article (blue border) is suggested for posting.' if chosen_article and oa_articles else ''}
-      {'&nbsp; ⚠️ = may be difficult for patients &nbsp; 📊 = reports clinical endpoints' if all_articles else ''}
+      {'&nbsp; ⚠️ = may be difficult for patients &nbsp; 📊 = reports clinical endpoints' if all_articles and not is_opp_scan else ''}
     </p>
     {body_content}
   </div>
