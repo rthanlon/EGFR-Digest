@@ -487,7 +487,7 @@ Respond in this exact JSON format with no other text:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode())
             text = data["content"][0]["text"].strip()
             if text.startswith("```"):
