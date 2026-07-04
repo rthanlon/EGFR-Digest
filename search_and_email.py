@@ -44,21 +44,21 @@ SEARCHES = [
         "label": "Oncology Breakthroughs — Exon 20 Opportunity Scan",
         "short_label": "OPP",
         "terms": [
-            "antibody-drug conjugate lung cancer",
-            "bispecific antibody NSCLC",
-            "PROTAC lung cancer",
+            "antibody-drug conjugate solid tumor",
+            "bispecific antibody solid tumor",
+            "PROTAC kinase degrader",
             "molecular glue cancer",
-            "EGFR resistance mechanism",
-            "HER2 resistance NSCLC",
-            "kinase inhibitor resistance lung cancer",
-            "novel targeted therapy NSCLC",
-            "immune checkpoint TKI combination lung cancer",
-            "EGFR structural biology",
-            "CAR-T cell lung cancer",
-            "tumor microenvironment NSCLC",
-            "immunotherapy resistance lung cancer",
-            "PD-1 PD-L1 EGFR lung cancer",
-            "neoantigen lung cancer immunotherapy",
+            "acquired resistance targeted therapy",
+            "kinase inhibitor resistance mechanism",
+            "tumor microenvironment immunotherapy",
+            "CAR-T solid tumor",
+            "checkpoint inhibitor combination therapy",
+            "neoantigen cancer immunotherapy",
+            "oncolytic virus cancer",
+            "cancer vaccine clinical trial",
+            "synthetic lethality cancer",
+            "DNA damage repair cancer therapy",
+            "exon skipping cancer mutation",
         ],
         "seen_file": "seen_opp.json",
         "header_color": "#6b3a00",
@@ -399,7 +399,8 @@ Here are today's new research articles from a broad oncology breakthrough scan:
 
 For EVERY article, provide:
 1. A plain-English summary (2-3 sentences) of what the article found or reports
-2. A brief note (1-2 sentences) on its potential relevance to EGFR/HER2 exon 20 research — be honest if relevance is low or indirect. If there is no plausible connection, say so plainly rather than forcing one.
+2. A specific explanation of why this finding might matter for the EGFR exon 20 insertion or HER2/ERBB2 exon 20 community — name the mechanism, drug class, resistance pathway, or biological insight that creates the connection. Be explicit about whether the connection is direct, indirect, or speculative. Do not force a connection where none exists — it is better to say "no clear relevance" than to invent one.
+3. A confidence level (HIGH, MEDIUM, or LOW) reflecting how strong you believe the connection to the exon 20 problem actually is.
 
 Be concise and direct. This output is for a technically sophisticated audience (researchers, oncologists, advocates) — not for patients or social media.
 
@@ -409,7 +410,8 @@ Respond in this exact JSON format with no other text:
     {{
       "article_index": <number, 1-based>,
       "summary": "<2-3 sentence plain-English summary of the finding>",
-      "exon20_relevance": "<1-2 sentences on relevance to exon 20 research, or 'Limited direct relevance to exon 20.' if none>"
+      "egfr_her2_relevance": "<2-3 sentences explaining specifically why this finding might matter for the EGFR exon 20 insertion or HER2/ERBB2 exon 20 community — name the specific mechanism, drug class, or biological insight that connects them. If the connection is speculative, say so explicitly. If there is no plausible connection, say: 'No clear relevance to EGFR or HER2 exon 20 identified.'>",
+      "confidence": "<HIGH, MEDIUM, or LOW — your confidence that this finding has genuine relevance to the exon 20 problem>"
     }}
   ],
   "chosen_article_index": null,
@@ -525,6 +527,8 @@ Respond in this exact JSON format with no other text:
                     article_summaries[make_key(combined[aidx])] = {
                         "summary": a.get("summary", ""),
                         "exon20_relevance": a.get("exon20_relevance", ""),
+                        "egfr_her2_relevance": a.get("egfr_her2_relevance", ""),
+                        "confidence": a.get("confidence", ""),
                     }
             if article_summaries:
                 print(f"  Generated summaries for {len(article_summaries)} articles.")
@@ -605,10 +609,17 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             opportunity_html = ""
             if akey in article_summaries:
                 s = article_summaries[akey]
-                opportunity_html = f'''<div class="flag flag-opportunity">
-                    <strong>Summary:</strong> {s["summary"]}<br>
-                    <strong>Exon 20 relevance:</strong> {s["exon20_relevance"]}
-                </div>'''
+                conf = s.get("confidence", "")
+                conf_colors = {"HIGH": "#1a5c2a", "MEDIUM": "#6b3a00", "LOW": "#555"}
+                conf_bg = conf_colors.get(conf, "#555")
+                conf_label = f' <span style="font-size:11px; padding:2px 6px; border-radius:3px; background:{conf_bg}; color:white;">{conf}</span>' if conf else ""
+                relevance_text = s.get("egfr_her2_relevance", s.get("exon20_relevance", ""))
+                opportunity_html = (
+                    f'<div class="flag flag-opportunity">'
+                    f'<strong>Summary:</strong> {s["summary"]}<br><br>'
+                    f'<strong>Relevance to EGFR/HER2 exon 20 community:</strong>{conf_label}<br>{relevance_text}'
+                    f'</div>'
+                )
         else:
             sensitive_html = (
                 f'<div class="flag flag-sensitive">⚠️ <strong>Heads up:</strong> {sensitive_keys[akey]}</div>'
