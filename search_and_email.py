@@ -497,8 +497,12 @@ Respond in this exact JSON format with no other text:
                     text = text[4:]
             result = json.loads(text.strip())
 
-            idx = result["chosen_article_index"] - 1
-            chosen = combined[idx] if 0 <= idx < len(combined) else (oa_articles[0] if oa_articles else None)
+            raw_idx = result.get("chosen_article_index")
+            if raw_idx is not None:
+                idx = raw_idx - 1
+                chosen = combined[idx] if 0 <= idx < len(combined) else (oa_articles[0] if oa_articles else None)
+            else:
+                chosen = None
             if chosen:
                 print(f"  Claude chose: {chosen['title'][:60]}...")
 
