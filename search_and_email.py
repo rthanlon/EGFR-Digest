@@ -326,11 +326,12 @@ def search_semantic_scholar(term):
 
 
 # ── Run all sources for a list of terms (OR logic) ───────────────────────────
-def run_all_sources(terms, epmc_days=30):
+def run_all_sources(terms, epmc_days=30, skip_epmc=False):
     all_results = []
     for term in terms:
         print(f"  Searching for: '{term}'")
-        all_results += search_europe_pmc(term, days=epmc_days)
+        if not skip_epmc:
+            all_results += search_europe_pmc(term, days=epmc_days)
         all_results += search_pubmed(term)
         all_results += _search_rxiv("biorxiv", term)
         all_results += _search_rxiv("medrxiv", term)
@@ -800,11 +801,11 @@ def run_search(search_config, today_str):
 
     print(f"  Searching academic sources...")
     is_opp = search_config.get("is_opportunity_scan", False)
-    # For opportunity scan: no date filter (Europe PMC date fields unreliable
-    # for broad terms). Memory file prevents resending old articles.
-    # For EGFR/HER2: 30-day window works reliably.
-    epmc_days = 36500 if is_opp else 30  # 36500 days ≈ 100 years = effectively no filter
-    all_articles = run_all_sources(terms, epmc_days=epmc_days)
+    # For opportunity scan: skip Europe PMC entirely — it returns the same
+    # fixed set of highly-cited articles every day regardless of date.
+    # PubMed's datetype=edat filter works reliably for all searches.
+    # For EGFR/HER2: use Europe PMC with 30-day window as normal.
+    all_articles = run_all_sources(terms, epmc_days=30, skip_epmc=is_opp)
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
     # Filter to genuinely new articles
