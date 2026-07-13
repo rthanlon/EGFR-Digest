@@ -825,8 +825,10 @@ def run_search(search_config, today_str):
 
     # Claude analyzes all new articles but only selects from OA academic for the post
     chosen_article, ai_result = analyze_articles(oa_articles, new_articles, label)
-    sensitive_keys = ai_result.get("sensitive_keys", {}) if ai_result else {}
-    endpoint_keys  = ai_result.get("endpoint_keys",  {}) if ai_result else {}
+    sensitive_keys   = ai_result.get("sensitive_keys",   {}) if ai_result else {}
+    endpoint_keys    = ai_result.get("endpoint_keys",    {}) if ai_result else {}
+    opportunity_keys = ai_result.get("opportunity_keys", {}) if ai_result else {}
+    article_summaries = ai_result.get("article_summaries", {}) if ai_result else {}
 
     total_new = len(oa_articles) + len(paywalled_articles)
     if total_new == 0:
@@ -835,7 +837,8 @@ def run_search(search_config, today_str):
         html = build_email_html(
             oa_articles, paywalled_articles, today_str, search_config,
             chosen_article, ai_result, sensitive_keys, endpoint_keys,
-            news_articles=news_articles
+            opportunity_keys=opportunity_keys,
+            article_summaries=article_summaries
         )
         subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled)"
         send_email(html, subject)
