@@ -188,7 +188,7 @@ def _fmt_authors_epmc(authors):
     names = [a.get("fullName", "") for a in authors[:3] if a.get("fullName")]
     return ", ".join(names) + (" et al." if len(authors) > 3 else "")
 
-def search_pubmed(term):
+def search_pubmed(term, exact_phrase=True):
     """Run two PubMed queries: all articles + free-full-text subset to flag open access.
     Uses datetype=edat (entrez date = when PubMed indexed it) which is reliable for
     catching newly added articles. Memory file prevents resending duplicates."""
@@ -201,7 +201,15 @@ def search_pubmed(term):
     today     = datetime.utcnow().strftime("%Y/%m/%d")
 
     # Query 1: ALL articles published in last 60 days
-    query_all = urllib.parse.quote(f'"{term}"[Title/Abstract]')
+    # Use exact phrase matching for specific terms (EGFR/HER2 searches)
+    # but keyword matching for broader opportunity scan terms
+    if exact_phrase:
+        query_all  = urllib.parse.quote(f'"{term}"[Title/Abstract]')
+        query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
+    else:
+        query_all  = urllib.parse.quote(f'{term}[Title/Abstract]')
+        query_free = urllib.parse.quote(f'{term}[Title/Abstract] AND free full text[filter]')
+
     data_all = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         f"?db=pubmed&term={query_all}"
@@ -212,8 +220,6 @@ def search_pubmed(term):
 
     time.sleep(0.4)
 
-    # Query 2: free full text in same window — to identify open access
-    query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
     data_free = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         f"?db=pubmed&term={query_free}"
@@ -328,13 +334,13 @@ def search_semantic_scholar(term):
 
 
 # ── Run all sources for a list of terms (OR logic) ───────────────────────────
-def run_all_sources(terms, epmc_days=30, skip_epmc=False):
+def run_all_sources(terms, epmc_days=30, skip_epmc=False, exact_phrase=True):
     all_results = []
     for term in terms:
         print(f"  Searching for: '{term}'")
         if not skip_epmc:
             all_results += search_europe_pmc(term, days=epmc_days)
-        all_results += search_pubmed(term)
+        all_results += search_pubmed(term, exact_phrase=exact_phrase)
         all_results += _search_rxiv("biorxiv", term)
         all_results += _search_rxiv("medrxiv", term)
         all_results += search_semantic_scholar(term)
@@ -811,7 +817,7 @@ def run_search(search_config, today_str):
     # fixed set of highly-cited articles every day regardless of date.
     # PubMed's datetype=edat filter works reliably for all searches.
     # For EGFR/HER2: use Europe PMC with 30-day window as normal.
-    all_articles = run_all_sources(terms, epmc_days=30, skip_epmc=is_opp)
+    all_articles = run_all_sources(terms, epmc_days=30, skip_epmc=is_opp, exact_phrase=not is_opp)
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
     # Filter to genuinely new articles
