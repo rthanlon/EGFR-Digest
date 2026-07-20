@@ -195,15 +195,17 @@ def search_pubmed(term):
     results = []
     # PubMed: use 30-day window with datetype=edat (entrez date = when
     # PubMed indexed it). This is the most reliable PubMed date parameter.
-    cutoff_30 = (datetime.utcnow() - timedelta(days=30)).strftime("%Y/%m/%d")
+    # Use pdat (publication date) with 60-day window — more reliable than edat
+    # for catching recently published articles. Memory file prevents repeats.
+    cutoff_60 = (datetime.utcnow() - timedelta(days=60)).strftime("%Y/%m/%d")
     today     = datetime.utcnow().strftime("%Y/%m/%d")
 
-    # Query 1: ALL articles indexed by PubMed in last 30 days
+    # Query 1: ALL articles published in last 60 days
     query_all = urllib.parse.quote(f'"{term}"[Title/Abstract]')
     data_all = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         f"?db=pubmed&term={query_all}"
-        f"&mindate={cutoff_30}&maxdate={today}&datetype=edat"
+        f"&mindate={cutoff_60}&maxdate={today}&datetype=pdat"
         f"&retmax=200&retmode=json&sort=date"
     )
     all_ids = set(data_all.get("esearchresult", {}).get("idlist", [])) if data_all else set()
@@ -215,7 +217,7 @@ def search_pubmed(term):
     data_free = fetch_json(
         f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         f"?db=pubmed&term={query_free}"
-        f"&mindate={cutoff_30}&maxdate={today}&datetype=edat"
+        f"&mindate={cutoff_60}&maxdate={today}&datetype=pdat"
         f"&retmax=200&retmode=json"
     )
     free_ids = set(data_free.get("esearchresult", {}).get("idlist", [])) if data_free else set()
