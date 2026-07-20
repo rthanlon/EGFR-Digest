@@ -831,8 +831,17 @@ def run_search(search_config, today_str):
 
     news_articles = []  # RSS feeds removed (403 blocks)
 
-    # Claude analyzes all new articles but only selects from OA academic for the post
-    chosen_article, ai_result = analyze_articles(oa_articles, new_articles, label)
+    # For opportunity scan: cap articles sent to Claude at 25 (most recent)
+    # to avoid token limits. All articles still saved to memory.
+    if is_opp:
+        oa_for_claude  = oa_articles[:25]
+        all_for_claude = new_articles[:25]
+    else:
+        oa_for_claude  = oa_articles
+        all_for_claude = new_articles
+
+    # Claude analyzes articles but only selects from OA academic for the post
+    chosen_article, ai_result = analyze_articles(oa_for_claude, all_for_claude, label)
     sensitive_keys   = ai_result.get("sensitive_keys",   {}) if ai_result else {}
     endpoint_keys    = ai_result.get("endpoint_keys",    {}) if ai_result else {}
     opportunity_keys = ai_result.get("opportunity_keys", {}) if ai_result else {}
@@ -842,13 +851,18 @@ def run_search(search_config, today_str):
     if total_new == 0:
         print(f"  No new articles — skipping email to avoid cluttering inbox.")
     else:
+        # For opportunity scan: show only the 25 articles Claude analyzed
+        # to keep the email manageable; remainder saved to memory only
+        display_oa  = oa_for_claude if is_opp else oa_articles
+        display_pay = [a for a in all_for_claude if not a.get("open_access")] if is_opp else paywalled_articles
         html = build_email_html(
-            oa_articles, paywalled_articles, today_str, search_config,
+            display_oa, display_pay, today_str, search_config,
             chosen_article, ai_result, sensitive_keys, endpoint_keys,
             opportunity_keys=opportunity_keys,
             article_summaries=article_summaries
         )
-        subject = f"{label} Digest — {today_str} ({len(oa_articles)} OA · {len(paywalled_articles)} paywalled)"
+        opp_note = f" (showing top 25 of {total_new})" if is_opp and total_new > 25 else ""
+        subject = f"{label} Digest — {today_str} ({len(display_oa)} OA · {len(display_pay)} paywalled{opp_note})"
         send_email(html, subject)
 
     # Save sent articles to memory
