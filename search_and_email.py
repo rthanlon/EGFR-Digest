@@ -387,15 +387,26 @@ def analyze_articles(oa_articles, all_articles, search_label):
     article_list = ""
     for i, a in enumerate(combined[:25]):
         oa_label = "[OPEN ACCESS]" if a.get("open_access") else "[PAYWALLED]"
-        article_list += f"""
-Article {i+1} {oa_label}:
-  Title: {clean(a['title'])}
-  Journal: {clean(a['journal'])}
-  Authors: {clean(a['authors'])}
-  Date: {clean(a['date'])}
-  Abstract: {clean(a['abstract']) if a['abstract'] else '(no abstract available)'}
-  Link: {a['link']}
-"""
+        # For opportunity scan: omit abstracts to avoid JSON corruption from
+        # special characters. Title + journal is sufficient for relevance screening.
+        if is_opp_scan:
+            article_list += (
+                f"Article {i+1} {oa_label}:\n"
+                f"  Title: {clean(a['title'])}\n"
+                f"  Journal: {clean(a['journal'])}\n"
+                f"  Date: {clean(a['date'])}\n"
+                f"  Link: {a['link']}\n\n"
+            )
+        else:
+            article_list += (
+                f"Article {i+1} {oa_label}:\n"
+                f"  Title: {clean(a['title'])}\n"
+                f"  Journal: {clean(a['journal'])}\n"
+                f"  Authors: {clean(a['authors'])}\n"
+                f"  Date: {clean(a['date'])}\n"
+                f"  Abstract: {clean(a['abstract']) if a['abstract'] else '(no abstract available)'}\n"
+                f"  Link: {a['link']}\n\n"
+            )
 
     # Use different prompt for opportunity scan vs standard searches
     if is_opp_scan:
