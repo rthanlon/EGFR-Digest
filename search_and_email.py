@@ -378,16 +378,22 @@ def analyze_articles(oa_articles, all_articles, search_label):
     combined = oa_articles + [a for a in all_articles if not a.get("open_access")]
     oa_indices = set(range(1, len(oa_articles) + 1))  # 1-based indices of OA articles
 
+    def clean(s):
+        """Remove characters that break JSON serialization in Claude's response."""
+        s = str(s).replace('"', "'")
+        s = s.replace('\n', ' ').replace('\r', ' ')
+        return s.strip()
+
     article_list = ""
     for i, a in enumerate(combined[:25]):
         oa_label = "[OPEN ACCESS]" if a.get("open_access") else "[PAYWALLED]"
         article_list += f"""
 Article {i+1} {oa_label}:
-  Title: {a['title']}
-  Journal: {a['journal']}
-  Authors: {a['authors']}
-  Date: {a['date']}
-  Abstract: {a['abstract'] or '(no abstract available)'}
+  Title: {clean(a['title'])}
+  Journal: {clean(a['journal'])}
+  Authors: {clean(a['authors'])}
+  Date: {clean(a['date'])}
+  Abstract: {clean(a['abstract']) if a['abstract'] else '(no abstract available)'}
   Link: {a['link']}
 """
 
@@ -499,11 +505,18 @@ Respond in this exact JSON format with no other text:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode())
             text = data["content"][0]["text"].strip()
+            # Strip markdown code fences if present
             if text.startswith("```"):
                 text = text.split("```")[1]
                 if text.startswith("json"):
                     text = text[4:]
-            result = json.loads(text.strip())
+            text = text.strip()
+            # Find the outermost JSON object in case of extra text
+            start = text.find("{")
+            end   = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                text = text[start:end]
+            result = json.loads(text)
 
             raw_idx = result.get("chosen_article_index")
             if raw_idx is not None:
