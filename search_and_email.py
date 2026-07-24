@@ -66,8 +66,6 @@ SEARCHES = [
     },
 ]
 
-
-
 # ── Seen Articles Tracker ─────────────────────────────────────────────────────
 def load_seen(seen_file):
     if os.path.exists(seen_file):
@@ -113,9 +111,8 @@ def is_recent(date_str):
         return True
 
 def is_within_days(date_str, days):
-    """Check if a date string falls within the last N days."""
     if not date_str:
-        return True  # include if date unknown
+        return True
     try:
         if len(date_str) == 4:
             cutoff_year = (datetime.utcnow() - timedelta(days=days)).year
@@ -124,15 +121,11 @@ def is_within_days(date_str, days):
         cutoff = datetime.utcnow() - timedelta(days=days)
         return pub_date >= cutoff
     except Exception:
-        return True  # include if we can't parse the date
+        return True
 
-# ── Source searches — return ALL articles with open_access flag ───────────────
+# ── Source searches ──────────────────────────────────────────────────────────
 def search_europe_pmc(term, days=30):
     results = []
-    # Europe PMC: fetch large page sorted newest first, filter client-side.
-    # API date params are unreliable; we use a 30-day client-side window
-    # against firstPublicationDate to catch recent articles, with the
-    # memory file as the final gate against resending old articles.
     query = urllib.parse.quote(f'"{term}"')
     url = (
         f"https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -145,15 +138,11 @@ def search_europe_pmc(term, days=30):
     raw_count = len(data.get("resultList", {}).get("result", []))
     print(f"    Europe PMC raw: {raw_count} total results returned")
     for item in data.get("resultList", {}).get("result", []):
-        # Client-side date filter: keep articles published in last 30 days.
-        # Wide window ensures we don't miss recently published articles.
-        # Memory file prevents resending anything already sent.
         pub_date = item.get("firstPublicationDate", "") or item.get("firstIndexDate", "")
         if pub_date and not is_within_days(pub_date, days):
             continue
         doi = item.get("doi")
         pmcid = item.get("pmcid", "")
-        # Determine if open access
         is_oa = item.get("isOpenAccess") == "Y"
         free_link = None
         for link in item.get("fullTextUrlList", {}).get("fullTextUrl", []):
@@ -162,7 +151,6 @@ def search_europe_pmc(term, days=30):
                 free_link = link.get("url")
                 break
         open_access = is_oa or bool(free_link)
-        # Build best available link — for paywalled articles use DOI
         if free_link:
             article_link = free_link
         elif pmcid:
@@ -189,20 +177,10 @@ def _fmt_authors_epmc(authors):
     return ", ".join(names) + (" et al." if len(authors) > 3 else "")
 
 def search_pubmed(term, exact_phrase=True):
-    """Run two PubMed queries: all articles + free-full-text subset to flag open access.
-    Uses datetype=edat (entrez date = when PubMed indexed it) which is reliable for
-    catching newly added articles. Memory file prevents resending duplicates."""
     results = []
-    # PubMed: use 30-day window with datetype=edat (entrez date = when
-    # PubMed indexed it). This is the most reliable PubMed date parameter.
-    # Use pdat (publication date) with 60-day window — more reliable than edat
-    # for catching recently published articles. Memory file prevents repeats.
     cutoff_60 = (datetime.utcnow() - timedelta(days=60)).strftime("%Y/%m/%d")
     today     = datetime.utcnow().strftime("%Y/%m/%d")
 
-    # Query 1: ALL articles published in last 60 days
-    # Use exact phrase matching for specific terms (EGFR/HER2 searches)
-    # but keyword matching for broader opportunity scan terms
     if exact_phrase:
         query_all  = urllib.parse.quote(f'"{term}"[Title/Abstract]')
         query_free = urllib.parse.quote(f'"{term}"[Title/Abstract] AND free full text[filter]')
@@ -267,7 +245,6 @@ def search_pubmed(term, exact_phrase=True):
     return results
 
 def _search_rxiv(server, term):
-    # All preprints are open access by definition
     results = []
     end_date = datetime.utcnow().strftime("%Y-%m-%d")
     start_date = date_cutoff_str()
@@ -332,8 +309,7 @@ def search_semantic_scholar(term):
     print(f"    Semantic Scholar: {len(results)} results ({oa_count} open access)")
     return results
 
-
-# ── Run all sources for a list of terms (OR logic) ───────────────────────────
+# ── Run all sources ──────────────────────────────────────────────────────────
 def run_all_sources(terms, epmc_days=30, skip_epmc=False, exact_phrase=True):
     all_results = []
     for term in terms:
@@ -356,30 +332,22 @@ def deduplicate(articles):
             unique.append(a)
     return unique
 
-# ── Claude AI: Pick Best OA Article, Draft Posts, Flag All Articles ───────────
+# ── Claude AI ────────────────────────────────────────────────────────────────
 def analyze_articles(oa_articles, all_articles, search_label):
-    """
-    oa_articles  — open-access only (for suggested post selection)
-    all_articles — everything (for flags)
-    """
     if not ANTHROPIC_API_KEY or not all_articles:
         return None, None
 
     is_opp_scan = search_label == "Oncology Breakthroughs — Exon 20 Opportunity Scan"
 
-    # For standard searches, skip Claude if there are no open-access articles
     if not is_opp_scan and not oa_articles:
         print(f"  No open-access articles — skipping Claude analysis.")
         return None, None
 
     print(f"  Asking Claude to analyze {len(all_articles)} articles ({len(oa_articles)} open access)...")
 
-    # Build article list — OA articles first, then paywalled
     combined = oa_articles + [a for a in all_articles if not a.get("open_access")]
-    oa_indices = set(range(1, len(oa_articles) + 1))  # 1-based indices of OA articles
 
     def clean(s):
-        """Remove characters that break JSON serialization in Claude's response."""
         s = str(s).replace('"', "'")
         s = s.replace('\n', ' ').replace('\r', ' ')
         return s.strip()
@@ -387,8 +355,6 @@ def analyze_articles(oa_articles, all_articles, search_label):
     article_list = ""
     for i, a in enumerate(combined[:25]):
         oa_label = "[OPEN ACCESS]" if a.get("open_access") else "[PAYWALLED]"
-        # For opportunity scan: omit abstracts to avoid JSON corruption from
-        # special characters. Title + journal is sufficient for relevance screening.
         if is_opp_scan:
             article_list += (
                 f"Article {i+1} {oa_label}:\n"
@@ -408,46 +374,26 @@ def analyze_articles(oa_articles, all_articles, search_label):
                 f"  Link: {a['link']}\n\n"
             )
 
-    # Use different prompt for opportunity scan vs standard searches
     if is_opp_scan:
-        prompt = f"""You are a scientific advisor to the Exon 20 Group, a patient advocacy organization focused on solving the EGFR exon 20 insertion and HER2/ERBB2 exon 20 mutation problem in lung cancer.
+        prompt = f"""You are a scientific advisor to the Exon 20 Group focused on solving the EGFR exon 20 insertion and HER2/ERBB2 exon 20 mutation problem in lung cancer.
 
-The Exon 20 Group is specifically interested in breakthroughs that could:
-- Overcome resistance to current EGFR exon 20 treatments (amivantamab, sunvozertinib)
-- Improve selectivity of drugs targeting exon 20 insertions over wild-type EGFR
-- Apply novel drug modalities (ADCs, bispecifics, PROTACs, molecular glues) to exon 20 mutations
-- Leverage immunotherapy (CAR-T, checkpoint inhibitors, tumor microenvironment modulation) in combination with targeted therapy
-- Illuminate new biology relevant to exon 20 insertion structural dynamics or resistance mechanisms
+Areas of interest: resistance to amivantamab/sunvozertinib, novel drug modalities (ADCs, bispecifics, PROTACs, molecular glues), immunotherapy combinations, EGFR/HER2 structural biology, acquired resistance mechanisms.
 
-Here are today's new research articles from a broad oncology breakthrough scan:
+Here are today's new research articles:
 
 {article_list}
 
-For EVERY article, provide:
-1. A plain-English summary (2-3 sentences) of what the article found or reports
-2. A specific explanation of why this finding might matter for the EGFR exon 20 insertion or HER2/ERBB2 exon 20 community — name the mechanism, drug class, resistance pathway, or biological insight that creates the connection. Be explicit about whether the connection is direct, indirect, or speculative. Do not force a connection where none exists — it is better to say "no clear relevance" than to invent one.
-3. A confidence level (HIGH, MEDIUM, or LOW) reflecting how strong you believe the connection to the exon 20 problem actually is.
+For EACH article, write a response block in EXACTLY this format. Use three dashes --- to separate blocks. Do not use JSON. Do not add extra text before or after the blocks.
 
-Be concise and direct. This output is for a technically sophisticated audience (researchers, oncologists, advocates) — not for patients or social media.
+ARTICLE: [number]
+SUMMARY: [2-3 sentences on what the article found]
+RELEVANCE: [1-2 sentences on connection to EGFR/HER2 exon 20, or write: No clear relevance to exon 20.]
+CONFIDENCE: [HIGH or MEDIUM or LOW]
 
-Respond in this exact JSON format with no other text:
-{{
-  "articles": [
-    {{
-      "article_index": <number, 1-based>,
-      "summary": "<2-3 sentence plain-English summary of the finding>",
-      "egfr_her2_relevance": "<2-3 sentences explaining specifically why this finding might matter for the EGFR exon 20 insertion or HER2/ERBB2 exon 20 community — name the specific mechanism, drug class, or biological insight that connects them. If the connection is speculative, say so explicitly. If there is no plausible connection, say: 'No clear relevance to EGFR or HER2 exon 20 identified.'>",
-      "confidence": "<HIGH, MEDIUM, or LOW — your confidence that this finding has genuine relevance to the exon 20 problem>"
-    }}
-  ],
-  "chosen_article_index": null,
-  "post_1": "",
-  "post_2": "",
-  "post_3": "",
-  "reasoning": "",
-  "sensitive_articles": [],
-  "endpoint_articles": []
-}}"""
+---
+
+Start with ARTICLE: 1 and go through all articles in order."""
+
     else:
         prompt = f"""You are helping the Exon 20 Group, a patient advocacy organization focused on thoracic oncology mutations including EGFR exon 20 insertion and HER2/ERBB2 alterations in lung cancer.
 
@@ -516,18 +462,48 @@ Respond in this exact JSON format with no other text:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode())
             text = data["content"][0]["text"].strip()
-            # Strip markdown code fences if present
-            if text.startswith("```"):
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            text = text.strip()
-            # Find the outermost JSON object in case of extra text
-            start = text.find("{")
-            end   = text.rfind("}") + 1
-            if start >= 0 and end > start:
-                text = text[start:end]
-            result = json.loads(text)
+
+            if is_opp_scan:
+                # Parse plain text format for opportunity scan
+                result = {
+                    "chosen_article_index": None,
+                    "post_1": "", "post_2": "", "post_3": "",
+                    "reasoning": "", "sensitive_articles": [],
+                    "endpoint_articles": [], "articles": []
+                }
+                blocks = text.split("---")
+                for block in blocks:
+                    block = block.strip()
+                    if not block:
+                        continue
+                    article_data = {}
+                    for line in block.split("\n"):
+                        line = line.strip()
+                        if line.startswith("ARTICLE:"):
+                            try:
+                                article_data["article_index"] = int(line.replace("ARTICLE:", "").strip())
+                            except:
+                                pass
+                        elif line.startswith("SUMMARY:"):
+                            article_data["summary"] = line.replace("SUMMARY:", "").strip()
+                        elif line.startswith("RELEVANCE:"):
+                            article_data["egfr_her2_relevance"] = line.replace("RELEVANCE:", "").strip()
+                        elif line.startswith("CONFIDENCE:"):
+                            article_data["confidence"] = line.replace("CONFIDENCE:", "").strip()
+                    if "article_index" in article_data:
+                        result["articles"].append(article_data)
+            else:
+                # Standard JSON parsing for EGFR/HER2 searches
+                if text.startswith("```"):
+                    text = text.split("```")[1]
+                    if text.startswith("json"):
+                        text = text[4:]
+                text = text.strip()
+                start = text.find("{")
+                end   = text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    text = text[start:end]
+                result = json.loads(text)
 
             raw_idx = result.get("chosen_article_index")
             if raw_idx is not None:
@@ -538,7 +514,6 @@ Respond in this exact JSON format with no other text:
             if chosen:
                 print(f"  Claude chose: {chosen['title'][:60]}...")
 
-            # Build flag dicts using combined article order
             sensitive_keys = {}
             for s in result.get("sensitive_articles", []):
                 sidx = s.get("article_index", 0) - 1
@@ -556,7 +531,6 @@ Respond in this exact JSON format with no other text:
             if endpoint_keys:
                 print(f"  Flagged {len(endpoint_keys)} articles with clinical endpoints.")
 
-            # Build article_summaries dict for opportunity scan
             article_summaries = {}
             for a in result.get("articles", []):
                 aidx = a.get("article_index", 0) - 1
@@ -597,7 +571,6 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
     short_label    = search_config.get("short_label", label)
     all_articles   = oa_articles + paywalled_articles
 
-    # ── X Post Draft Box — hidden for opportunity scan ──
     if chosen_article and ai_result and not is_opp_scan:
         link      = chosen_article['link']
         post_1    = ai_result.get("post_1", "")
@@ -639,8 +612,8 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
         )
         is_chosen = chosen_article and akey == make_key(chosen_article)
         highlight = f' style="border-left: 4px solid {header_color}; padding-left: 16px;"' if is_chosen else ""
+
         if is_opp_scan:
-            # Opportunity scan: show per-article summaries, no patient flags
             sensitive_html = ""
             endpoint_html = ""
             opportunity_html = ""
@@ -667,6 +640,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
                 if akey in endpoint_keys else ""
             )
             opportunity_html = ""
+
         oa_label = ' &nbsp;<span style="color: #2d6a4f; font-size: 12px; font-weight: bold;">(open access)</span>' if section == "oa" else ""
         if section == "oa":
             action = f'<a href="{a["link"]}" class="read-link">Read full article →</a>'
@@ -688,18 +662,15 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             {action}
         </div>"""
 
-    # ── Build body content ──
     if not all_articles:
         body_content = f"""
         <div class="no-results">
-            <p>No new articles found in the past {DAYS_BACK} days for
-            <strong>{label}</strong> that haven't already been sent.</p>
+            <p>No new articles found for <strong>{label}</strong> that haven't already been sent.</p>
             <p>The search will run again tomorrow.</p>
         </div>"""
     else:
         oa_cards = "".join(make_card(a, "oa") for a in oa_articles)
         pay_cards = "".join(make_card(a, "pay") for a in paywalled_articles)
-
         oa_section = oa_cards if oa_cards else '<p class="no-results">No open-access articles found today.</p>'
 
         if pay_cards:
@@ -718,23 +689,7 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
             divider = ""
             pay_section = ""
 
-        # ── News section ──
-        if news_articles:
-            news_cards = "".join(make_card(a, "news") for a in news_articles)
-            news_section = f"""
-            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 40px 0 28px 0;">
-                <tr>
-                    <td bgcolor="#4a235a" style="background-color: #4a235a; padding: 16px 24px; text-align: center;">
-                        <span style="color: #ffffff; font-size: 16px; font-weight: bold; font-family: Georgia, serif; letter-spacing: 2px;">
-                            📰 &nbsp; CLINICAL NEWS &amp; CONFERENCE UPDATES &nbsp;·&nbsp; {len(news_articles)} ARTICLE{"S" if len(news_articles) != 1 else ""} &nbsp; 📰
-                        </span>
-                    </td>
-                </tr>
-            </table>
-            {news_cards}"""
-        else:
-            news_section = ""
-
+        news_section = ""
         body_content = oa_section + divider + pay_section + news_section
 
     total = len(all_articles)
@@ -776,10 +731,6 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
   .flag-opportunity {{ background: #f0e8ff; border-left: 4px solid #6b3a8b; color: #3a1a5c; line-height: 1.6; }}
   .read-link {{ font-size: 13px; color: #c0392b; text-decoration: none; font-weight: bold; }}
   .paywall-link {{ font-size: 13px; color: #888; text-decoration: none; font-weight: normal; }}
-  .divider {{ margin: 40px 0 32px 0; }}
-  .divider-banner {{ background: #8b0000; color: white; text-align: center; padding: 16px 24px;
-                    font-size: 16px; font-weight: bold; letter-spacing: 2px; border-radius: 6px;
-                    border: 3px solid #5a0000; }}
   .no-results {{ color: #555; font-size: 15px; padding: 20px 0; }}
   .footer {{ font-size: 11px; color: #aaa; text-align: center; margin-top: 20px; }}
 </style>
@@ -802,14 +753,13 @@ def build_email_html(oa_articles, paywalled_articles, today_str, search_config,
   </div>
   <div class="footer">
     Academic: PubMed · Europe PMC · bioRxiv · medRxiv · Semantic Scholar<br>
-    Clinical News: Targeted Oncology · OncLive · Medscape · NCI<br>
     Sent automatically to robertthanlon@gmail.com (forwarded to marcia@askican.org) · Exon 20 Group Research Monitor
   </div>
 </div>
 </body>
 </html>"""
 
-# ── Send Email via Resend ─────────────────────────────────────────────────────
+# ── Send Email ────────────────────────────────────────────────────────────────
 def send_email(html_body, subject):
     import resend
     resend.api_key = RESEND_API_KEY
@@ -837,26 +787,15 @@ def run_search(search_config, today_str):
 
     print(f"  Searching academic sources...")
     is_opp = search_config.get("is_opportunity_scan", False)
-    # For opportunity scan: skip Europe PMC entirely — it returns the same
-    # fixed set of highly-cited articles every day regardless of date.
-    # PubMed's datetype=edat filter works reliably for all searches.
-    # For EGFR/HER2: use Europe PMC with 30-day window as normal.
     all_articles = run_all_sources(terms, epmc_days=30, skip_epmc=is_opp, exact_phrase=not is_opp)
     all_articles.sort(key=lambda x: x.get("date", ""), reverse=True)
 
-    # Filter to genuinely new articles
     new_articles = [a for a in all_articles if make_key(a) not in seen]
-
-    # Split into open-access and paywalled
     oa_articles        = [a for a in new_articles if a.get("open_access")]
     paywalled_articles = [a for a in new_articles if not a.get("open_access")]
 
     print(f"  Total found: {len(all_articles)} | New: {len(new_articles)} ({len(oa_articles)} OA, {len(paywalled_articles)} paywalled)")
 
-    news_articles = []  # RSS feeds removed (403 blocks)
-
-    # For opportunity scan: cap articles sent to Claude at 25 (most recent)
-    # to avoid token limits. All articles still saved to memory.
     if is_opp:
         oa_for_claude  = oa_articles[:25]
         all_for_claude = new_articles[:25]
@@ -864,19 +803,16 @@ def run_search(search_config, today_str):
         oa_for_claude  = oa_articles
         all_for_claude = new_articles
 
-    # Claude analyzes articles but only selects from OA academic for the post
     chosen_article, ai_result = analyze_articles(oa_for_claude, all_for_claude, label)
-    sensitive_keys   = ai_result.get("sensitive_keys",   {}) if ai_result else {}
-    endpoint_keys    = ai_result.get("endpoint_keys",    {}) if ai_result else {}
-    opportunity_keys = ai_result.get("opportunity_keys", {}) if ai_result else {}
+    sensitive_keys    = ai_result.get("sensitive_keys",    {}) if ai_result else {}
+    endpoint_keys     = ai_result.get("endpoint_keys",     {}) if ai_result else {}
+    opportunity_keys  = ai_result.get("opportunity_keys",  {}) if ai_result else {}
     article_summaries = ai_result.get("article_summaries", {}) if ai_result else {}
 
     total_new = len(oa_articles) + len(paywalled_articles)
     if total_new == 0:
         print(f"  No new articles — skipping email to avoid cluttering inbox.")
     else:
-        # For opportunity scan: show only the 25 articles Claude analyzed
-        # to keep the email manageable; remainder saved to memory only
         display_oa  = oa_for_claude if is_opp else oa_articles
         display_pay = [a for a in all_for_claude if not a.get("open_access")] if is_opp else paywalled_articles
         html = build_email_html(
@@ -889,7 +825,6 @@ def run_search(search_config, today_str):
         subject = f"{label} Digest — {today_str} ({len(display_oa)} OA · {len(display_pay)} paywalled{opp_note})"
         send_email(html, subject)
 
-    # Save sent articles to memory
     for a in new_articles:
         seen.add(make_key(a))
     save_seen(seen, seen_file)
