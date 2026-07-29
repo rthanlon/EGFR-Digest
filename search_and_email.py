@@ -392,7 +392,12 @@ CONFIDENCE: [HIGH or MEDIUM or LOW]
 
 ---
 
-Start with ARTICLE: 1 and go through all articles in order."""
+Start with ARTICLE: 1 and go through all articles in order.
+
+Important rules:
+- CONFIDENCE must match RELEVANCE. If you write "No clear relevance to exon 20" in RELEVANCE, CONFIDENCE must be LOW.
+- Never assign HIGH or MEDIUM confidence when the relevance statement says there is no clear connection.
+- Only assign HIGH when there is a direct, specific mechanistic link to EGFR or HER2 exon 20 biology."""
 
     else:
         prompt = f"""You are helping the Exon 20 Group, a patient advocacy organization focused on thoracic oncology mutations including EGFR exon 20 insertion and HER2/ERBB2 alterations in lung cancer.
@@ -541,6 +546,17 @@ Respond in this exact JSON format with no other text:
                         "egfr_her2_relevance": a.get("egfr_her2_relevance", ""),
                         "confidence": a.get("confidence", ""),
                     }
+            # Post-processing: fix contradictory confidence/relevance pairs
+            no_relevance_phrases = [
+                "no clear relevance", "does not directly", "not directly applicable",
+                "not directly intersect", "no direct connection", "no specific connection",
+                "not applicable to", "unrelated to exon 20", "unrelated to egfr",
+            ]
+            for key, s in article_summaries.items():
+                relevance_lower = s.get("egfr_her2_relevance", "").lower()
+                if any(phrase in relevance_lower for phrase in no_relevance_phrases):
+                    if s.get("confidence") in ("HIGH", "MEDIUM"):
+                        s["confidence"] = "LOW"
             if article_summaries:
                 print(f"  Generated summaries for {len(article_summaries)} articles.")
 
